@@ -141,4 +141,4 @@ jobs:
           -H 'Content-type: application/json' \
           -d '{
             "text": "❌ *[news-crawler-backend]* 빌드 실패!\n작업자: ${{ github.actor }}\n확인: ${{ github.server_url }}/${{ github.repository }}/actions"
-          }'
+          }' 
