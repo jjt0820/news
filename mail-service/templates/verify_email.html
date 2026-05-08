@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>이메일 인증</title>
+</head>
+<body style="margin:0;padding:0;background:#f5f7fb;font-family:Arial,sans-serif;">
+    <div style="max-width:640px;margin:24px auto;background:#ffffff;border-radius:12px;padding:28px;border:1px solid #e6e8ef;">
+        <h2 style="margin:0 0 16px 0;color:#1b1f2a;">{{ service_name }} 이메일 인증</h2>
+        <p style="margin:0 0 12px 0;color:#333;">안녕하세요 {{ email }}님,</p>
+        <p style="margin:0 0 20px 0;color:#333;">
+            아래 버튼을 눌러 이메일 인증을 완료해주세요.
+        </p>
+        <a href="{{ verify_url }}"
+           style="display:inline-block;background:#2f6fed;color:#fff;text-decoration:none;padding:12px 18px;border-radius:8px;font-weight:600;">
+            이메일 인증하기
+        </a>
+        <p style="margin:20px 0 0 0;color:#666;font-size:13px;word-break:break-all;">
+            버튼이 동작하지 않으면 이 링크를 복사해 브라우저에 붙여넣어 주세요: {{ verify_url }}
+        </p>
+    </div>
+</body>
+</html>

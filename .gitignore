@@ -1,0 +1,35 @@
+.env
+**/.env
+
+# Logs
+logs/
+**/logs/
+*.log
+
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+ENV/
+env/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Databases / local artifacts
+*.sqlite
+*.sqlite3
+
+# Cursor workspace metadata (optional)
+.cursor/
