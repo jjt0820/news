@@ -3,7 +3,7 @@ name: Frontend CI/CD Pipeline
 # 트리거: main 브랜치 frontend 폴더 변경 시에만 실행
 on:
   push:
-    branches: [main, feature/frontend]
+    branches: [main]
     paths:
       - 'frontend/**'
 
