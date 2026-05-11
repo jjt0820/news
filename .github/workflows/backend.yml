@@ -119,9 +119,19 @@ jobs:
           ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          kubectl set image cronjob/news-crawler \
+          kubectl set image cronjob/crawler-cronjob \
             crawler=$ECR_REGISTRY/news-crawler-backend:$IMAGE_TAG \
-            -n ${{ secrets.EKS_NAMESPACE }}
+            -n news-app-ns
+
+          kubectl set image deployment/analyzer-deployment \
+            analyzer=$ECR_REGISTRY/news-crawler-backend:$IMAGE_TAG \
+            -n news-app-ns
+
+          kubectl set image deployment/notifier-deployment \
+            notifier=$ECR_REGISTRY/news-crawler-backend:$IMAGE_TAG \
+            -n news-app-ns
+
+         
 
 # ────────────────────────────────────
 # JOB 4: Slack 알림 (항상 실행)

@@ -88,9 +88,9 @@ jobs:
           ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          kubectl set image deployment/news-crawler-frontend \
+          kubectl set image deployment/webserving-deployment \
             frontend=$ECR_REGISTRY/news-crawler-frontend:$IMAGE_TAG \
-            -n production
+            -n news-app-ns
 
 # ────────────────────────────────────
 # JOB 3: Slack 알림 (항상 실행)
