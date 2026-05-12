@@ -25,6 +25,14 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Trivy 보안 스캔
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: './frontend'
+          severity: 'HIGH,CRITICAL'
+          exit-code: '1' # 취약점 발견 시 실패 처리
+
       - name: Node.js 설치
         uses: actions/setup-node@v4
         with:
@@ -71,11 +79,14 @@ jobs:
       - name: 이미지 빌드 & ECR 푸시
         env:
           ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
-          ECR_REPOSITORY: news-crawler-frontend
+          ECR_REPOSITORY: patrasche-webserving
           IMAGE_TAG: ${{ github.sha }}
         run: |
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG ./frontend
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+      
+      - name: kubectl 설치
+        uses: azure/setup-kubectl@v3
 
       - name: kubeconfig 업데이트
         run: |
@@ -89,7 +100,7 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           kubectl set image deployment/webserving-deployment \
-            frontend=$ECR_REGISTRY/news-crawler-frontend:$IMAGE_TAG \
+            frontend=$ECR_REGISTRY/patrasche-webserving:$IMAGE_TAG \
             -n news-app-ns
 
 # ────────────────────────────────────

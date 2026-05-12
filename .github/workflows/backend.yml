@@ -25,27 +25,44 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Trivy 보안 스캔
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: './backend'
+          severity: 'HIGH,CRITICAL'
+          exit-code: '1'
+
       - name: 파이썬 설치
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: 의존성 설치
-        working-directory: backend
         run: |
-          pip install -r requirements.txt
+          pip install -r backend/mail-service/requirements.txt
+          pip install -r backend/news-service/requirements.txt
+          pip install -r backend/user-service/requirements.txt
           pip install flake8 pytest
 
       - name: 린트 검사 (flake8)
-        working-directory: backend
-        run: flake8 . --max-line-length=100 --exclude=__pycache__
+        run: |
+          flake8 backend/mail-service --max-line-length=100 --exclude=__pycache__
+          flake8 backend/news-service --max-line-length=100 --exclude=__pycache__
+          flake8 backend/user-service --max-line-length=100 --exclude=__pycache__
 
       - name: 테스트 실행 (pytest)
-        working-directory: backend
-        run: pytest tests/ -v
+        run: |
+           pytest backend/mail-service/tests/ -v
+           pytest backend/news-service/tests/ -v
+           pytest backend/user-service/tests/ -v
+
 
       - name: 도커 빌드 확인
-        run: docker build -t news-crawler:test ./backend
+        run: |
+            docker build -t patrasche-notifier:test ./backend/mail-service
+            docker build -t patrasche-crawler:test ./backend/news-service
+            docker build -t patrasche-backend:test ./backend/user-service
 
 # ────────────────────────────────────
 # JOB 2: ECR 푸시 (CI 통과 후 실행)
@@ -77,14 +94,19 @@ jobs:
       - name: 이미지 빌드 & ECR 푸시
         env:
           ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
-          ECR_REPOSITORY: news-crawler-backend
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker build \
-            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
-            ./backend
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker build -t $ECR_REGISTRY/patrasche-notifier:$IMAGE_TAG ./backend/mail-service
+          docker push $ECR_REGISTRY/patrasche-notifier:$IMAGE_TAG
+        
+          docker build -t $ECR_REGISTRY/patrasche-crawler:$IMAGE_TAG ./backend/news-service
+          docker push $ECR_REGISTRY/patrasche-crawler:$IMAGE_TAG
+          
+          docker build -t $ECR_REGISTRY/patrasche-analyzer:$IMAGE_TAG ./backend/news-service
+          docker push $ECR_REGISTRY/patrasche-analyzer:$IMAGE_TAG
 
+          docker build -t $ECR_REGISTRY/patrasche-backend:$IMAGE_TAG ./backend/user-service
+          docker push $ECR_REGISTRY/patrasche-backend:$IMAGE_TAG
 # ────────────────────────────────────
 # JOB 3: EKS 배포 (ECR 푸시 후 실행)
 # ────────────────────────────────────
@@ -114,21 +136,25 @@ jobs:
       - name: kubectl 설치
         uses: azure/setup-kubectl@v3
 
-      - name: CronJob 이미지 업데이트
+      - name: EKS 파드 이미지 업데이트
         env:
           ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
           kubectl set image cronjob/crawler-cronjob \
-            crawler=$ECR_REGISTRY/news-crawler-backend:$IMAGE_TAG \
-            -n news-app-ns
+           crawler=$ECR_REGISTRY/patrasche-crawler:$IMAGE_TAG \
+           -n news-app-ns
 
           kubectl set image deployment/analyzer-deployment \
-            analyzer=$ECR_REGISTRY/news-crawler-backend:$IMAGE_TAG \
-            -n news-app-ns
+           analyzer=$ECR_REGISTRY/patrasche-analyzer:$IMAGE_TAG \
+           -n news-app-ns
 
           kubectl set image deployment/notifier-deployment \
-            notifier=$ECR_REGISTRY/news-crawler-backend:$IMAGE_TAG \
+            notifier=$ECR_REGISTRY/patrasche-notifier:$IMAGE_TAG \
+            -n news-app-ns
+
+          kubectl set image deployment/webserving-deployment \
+            backend=$ECR_REGISTRY/patrasche-backend:$IMAGE_TAG \
             -n news-app-ns
 
          
