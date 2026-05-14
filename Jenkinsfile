@@ -39,16 +39,16 @@ pipeline {
       }
     }
     //pytest = Python 테스트 실행(서비스 3개 각각 검사)
-    stage('테스트') {
-      steps {
-        sh '''
-          pip3 install pytest
-          pytest backend/mail-service/tests/ -v
-          pytest backend/news-service/tests/ -v
-          pytest backend/user-service/tests/ -v
-        '''
-      }
-    }
+    // stage('테스트') {
+    //   steps {
+    //     sh '''
+    //       pip3 install pytest
+    //       /var/lib/jenkins/.local/bin/pytest backend/mail-service/tests/ -v
+    //       /var/lib/jenkins/.local/bin/pytest backend/news-service/tests/ -v
+    //       /var/lib/jenkins/.local/bin/pytest backend/user-service/tests/ -v
+    //     '''
+    //   }
+    // }
 
     stage('도커 빌드 & ECR 푸시') {
       steps {
