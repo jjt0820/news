@@ -1,0 +1,44 @@
+- name: EKS 파드 배포
+  hosts: eks
+  vars:
+    eks_cluster: patrasche-news
+    namespace: news-app-ns
+
+  tasks:
+    - name: kubeconfig 업데이트
+      shell: |
+        aws eks update-kubeconfig \
+          --name {{ eks_cluster }} \
+          --region ap-northeast-2
+
+    - name: 웹서빙 파드 이미지 업데이트
+      shell: |
+        kubectl set image deployment/webserving-deployment \
+          frontend={{ ecr_registry }}/patrasche-webserving:{{ image_tag }} \
+          -n {{ namespace }}
+
+    - name: crawler 파드 이미지 업데이트
+      shell: |
+        kubectl set image cronjob/crawler-cronjob \
+          crawler={{ ecr_registry }}/patrasche-crawler:{{ image_tag }} \
+          -n {{ namespace }}
+
+    - name: analyzer 파드 이미지 업데이트
+      shell: |
+        kubectl set image deployment/analyzer-deployment \
+          analyzer={{ ecr_registry }}/patrasche-analyzer:{{ image_tag }} \
+          -n {{ namespace }}
+
+    - name: notifier 파드 이미지 업데이트
+      shell: |
+        kubectl set image deployment/notifier-deployment \
+          notifier={{ ecr_registry }}/patrasche-notifier:{{ image_tag }} \
+          -n {{ namespace }}
+
+    - name: 배포 상태 확인
+      shell: kubectl get pods -n {{ namespace }}
+      register: pod_status
+
+    - name: 파드 상태 출력
+      debug:
+        msg: "{{ pod_status.stdout }}"
