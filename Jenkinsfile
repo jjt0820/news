@@ -20,11 +20,8 @@ pipeline {
     stage('Trivy 보안 스캔') {
       steps {
         //셸 명령어 실행
-        sh '''
-          trivy fs ./backend \ 
-            --severity HIGH,CRITICAL \
-            --exit-code 1
-        '''
+        sh ' trivy fs ./backend --severity HIGH,CRITICAL --exit-code 1'
+        
       } //trivy fs -> 파일시스템 스캔
         //--severity HIGH,CRITICAL -> 높은 취약점만
         //--exit-code 1 -> 발견 시 실패
@@ -56,24 +53,14 @@ pipeline {
     stage('도커 빌드 & ECR 푸시') {
       steps {
         sh '''
-          aws ecr get-login-password --region ap-northeast-2 \
-            | docker login --username AWS \
-              --password-stdin $ECR_REGISTRY
-
-          docker build -t $ECR_REGISTRY/patrasche-notifier:$IMAGE_TAG \
-            ./backend/mail-service
+          aws ecr get-login-password --region ap-northeast-2 | docker login --username AWS --password-stdin $ECR_REGISTRY
+          docker build -t $ECR_REGISTRY/patrasche-notifier:$IMAGE_TAG ./backend/mail-service
           docker push $ECR_REGISTRY/patrasche-notifier:$IMAGE_TAG
-
-          docker build -t $ECR_REGISTRY/patrasche-crawler:$IMAGE_TAG \
-            ./backend/news-service
+          docker build -t $ECR_REGISTRY/patrasche-crawler:$IMAGE_TAG ./backend/news-service
           docker push $ECR_REGISTRY/patrasche-crawler:$IMAGE_TAG
-
-          docker build -t $ECR_REGISTRY/patrasche-analyzer:$IMAGE_TAG \
-            ./backend/news-service
+          docker build -t $ECR_REGISTRY/patrasche-analyzer:$IMAGE_TAG ./backend/news-service
           docker push $ECR_REGISTRY/patrasche-analyzer:$IMAGE_TAG
-
-          docker build -t $ECR_REGISTRY/patrasche-backend:$IMAGE_TAG \
-            ./backend/user-service
+          docker build -t $ECR_REGISTRY/patrasche-backend:$IMAGE_TAG ./backend/user-service
           docker push $ECR_REGISTRY/patrasche-backend:$IMAGE_TAG
         '''
       } // ECR 로그인
