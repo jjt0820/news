@@ -31,7 +31,7 @@ pipeline {
     stage('린트 검사') {
       steps {
         sh '''
-          pip install flake8
+          pip3 install flake8
           flake8 backend/mail-service --max-line-length=100
           flake8 backend/news-service --max-line-length=100
           flake8 backend/user-service --max-line-length=100
@@ -42,7 +42,7 @@ pipeline {
     stage('테스트') {
       steps {
         sh '''
-          pip install pytest
+          pip3 install pytest
           pytest backend/mail-service/tests/ -v
           pytest backend/news-service/tests/ -v
           pytest backend/user-service/tests/ -v
