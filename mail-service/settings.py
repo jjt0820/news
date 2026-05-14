@@ -16,6 +16,8 @@ class Settings(BaseSettings):
 
     # 메일 본문에 넣을 인증 링크(선택)
     VERIFY_BASE_URL: str = "http://localhost:8000/verify"
+    USER_SERVICE_DB_PATH: str | None = None
+    NEWS_FETCHER_DB_PATH: str | None = None
 
 
 settings = Settings()

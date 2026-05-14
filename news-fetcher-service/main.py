@@ -1,0 +1,456 @@
+from __future__ import annotations
+
+import json
+import os
+import random
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List
+
+import httpx
+from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.triggers.cron import CronTrigger
+from dotenv import load_dotenv
+
+from database import get_existing_links, save_news
+from fetcher import DEFAULT_NEWS_LIMIT, fetch_latest_news_all_categories
+from json_logging import (
+    SCHEDULER_TIMEZONE,
+    register_scheduler_logging,
+    setup_service_logging,
+)
+
+_SERVICE_DIR = Path(__file__).resolve().parent
+load_dotenv(_SERVICE_DIR / ".env")
+load_dotenv()
+
+logger = setup_service_logging("news-fetcher")
+
+DEFAULT_SUMMARIZER_URL = "http://localhost:8004/summarize"
+DEFAULT_HTTP_TIMEOUT_SECONDS = 600.0
+DEFAULT_HTTP_RETRIES_ON_QUOTA = 3
+FETCH_CRON_HOUR_KST = 6
+FETCH_CRON_MINUTE_KST = 0
+
+
+def _env_int(key: str, default: int) -> int:
+    raw = os.getenv(key)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _env_float(key: str, default: float) -> float:
+    raw = os.getenv(key)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _env_bool(key: str, default: bool) -> bool:
+    raw = os.getenv(key)
+    if raw is None or not str(raw).strip():
+        return default
+    normalized = str(raw).strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def _summarizer_http_should_retry(status_code: int) -> bool:
+    return status_code in (429, 502)
+
+
+def _format_kst_datetime(value: datetime) -> str:
+    return value.astimezone(SCHEDULER_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _build_batch_metadata(*, scheduled_run_time: datetime | None = None) -> Dict[str, str]:
+    scheduled_local = (scheduled_run_time or datetime.now(SCHEDULER_TIMEZONE)).astimezone(
+        SCHEDULER_TIMEZONE
+    )
+    collected_local = datetime.now(SCHEDULER_TIMEZONE)
+    return {
+        "batch_date_kst": scheduled_local.date().isoformat(),
+        "scheduled_run_time_kst": _format_kst_datetime(scheduled_local),
+        "collected_at_kst": _format_kst_datetime(collected_local),
+    }
+
+
+def _post_summarize_with_retries(
+    client: httpx.Client,
+    url: str,
+    payload: Dict[str, Any],
+    *,
+    category: str,
+    item_count: int,
+    max_extra_tries: int,
+) -> Dict[str, Any]:
+    """
+    첫 시도 + 429/502 시 최대 max_extra_tries번 재시도(총 1+max_extra_tries회까지).
+    retrying_count: 재시도 차수(0=첫 요청 직후 성공 또는 첫 시도 전, 1=첫 실패 후 첫 재시도 전 …).
+    """
+    total_attempts = 1 + max(0, max_extra_tries)
+    last_error: BaseException | None = None
+
+    for attempt in range(1, total_attempts + 1):
+        retrying_count = attempt - 1
+        try:
+            logger.info(
+                "summarizer_http_request",
+                extra={
+                    "event": "summarizer_http_request",
+                    "category": category,
+                    "attempt": attempt,
+                    "retrying_count": retrying_count,
+                    "max_attempts": total_attempts,
+                    "item_count": item_count,
+                    "url": url,
+                },
+            )
+            resp = client.post(url, json=payload)
+            resp.raise_for_status()
+            body = resp.json()
+            logger.info(
+                "summarizer_http_success",
+                extra={
+                    "event": "summarizer_http_success",
+                    "category": category,
+                    "attempt": attempt,
+                    "retrying_count": retrying_count,
+                    "item_count": item_count,
+                    "http_status": resp.status_code,
+                },
+            )
+            return body
+        except httpx.HTTPStatusError as exc:
+            last_error = exc
+            status = exc.response.status_code if exc.response is not None else 0
+            body_snip = (exc.response.text[:2000] if exc.response is not None else "") or ""
+            logger.warning(
+                "summarizer_http_error",
+                extra={
+                    "event": "summarizer_http_error",
+                    "category": category,
+                    "attempt": attempt,
+                    "retrying_count": retrying_count,
+                    "http_status": status,
+                    "will_retry": bool(
+                        _summarizer_http_should_retry(status) and attempt < total_attempts
+                    ),
+                    "response_body_preview": body_snip[:500] if body_snip else None,
+                },
+            )
+            if not _summarizer_http_should_retry(status) or attempt >= total_attempts:
+                raise
+            backoff = (2 ** (attempt - 1)) + random.uniform(0.0, 0.35)
+            logger.info(
+                "summarizer_http_backoff",
+                extra={
+                    "event": "summarizer_http_backoff",
+                    "category": category,
+                    "attempt": attempt,
+                    "retrying_count": retrying_count + 1,
+                    "sleep_seconds": round(backoff, 3),
+                    "reason_http_status": status,
+                },
+            )
+            time.sleep(backoff)
+        except httpx.RequestError as exc:
+            last_error = exc
+            logger.error(
+                "summarizer_http_transport_error",
+                extra={
+                    "event": "summarizer_http_transport_error",
+                    "category": category,
+                    "attempt": attempt,
+                    "retrying_count": retrying_count,
+                    "error": str(exc),
+                },
+            )
+            raise
+
+    if last_error:
+        raise last_error
+    raise RuntimeError("summarizer HTTP: unexpected empty retry loop")
+
+
+def run_pipeline(
+    *,
+    per_category_limit: int | None = None,
+    summarizer_url: str | None = None,
+    http_timeout_seconds: float | None = None,
+    summarizer_http_max_extra_tries: int | None = None,
+    batch_metadata: Dict[str, str] | None = None,
+) -> Dict[str, int]:
+    """
+    1) 카테고리별 뉴스 수집
+    2) DB에 이미 있는 링크 선필터링
+    3) 신규 뉴스를 summarizer HTTP API로 요약 요청(429/502 시 재시도)
+    4) 요약 결과 DB 저장
+    """
+    effective_limit = (
+        per_category_limit
+        if per_category_limit is not None
+        else _env_int("NEWS_PER_CATEGORY_LIMIT", DEFAULT_NEWS_LIMIT)
+    )
+    timeout = (
+        http_timeout_seconds
+        if http_timeout_seconds is not None
+        else _env_float("SUMMARIZER_HTTP_TIMEOUT_SECONDS", DEFAULT_HTTP_TIMEOUT_SECONDS)
+    )
+    max_extra = (
+        summarizer_http_max_extra_tries
+        if summarizer_http_max_extra_tries is not None
+        else _env_int("SUMMARIZER_HTTP_MAX_EXTRA_TRIES", DEFAULT_HTTP_RETRIES_ON_QUOTA)
+    )
+
+    url = (summarizer_url or os.environ.get("SUMMARIZER_URL") or DEFAULT_SUMMARIZER_URL).rstrip("/")
+    if not url.endswith("/summarize"):
+        url = f"{url.rstrip('/')}/summarize"
+
+    logger.info(
+        "pipeline_run_start",
+        extra={
+            "event": "pipeline_run_start",
+            "summarizer_url": url,
+            "news_per_category_limit": effective_limit,
+            "summarizer_http_max_extra_tries": max_extra,
+            "http_timeout_seconds": timeout,
+            "batch_date_kst": (batch_metadata or {}).get("batch_date_kst"),
+            "scheduled_run_time_kst": (batch_metadata or {}).get("scheduled_run_time_kst"),
+        },
+    )
+
+    fetched_by_category = fetch_latest_news_all_categories(limit=effective_limit)
+
+    stats: Dict[str, int] = {
+        "fetched_total": 0,
+        "already_saved": 0,
+        "to_summarize": 0,
+        "summarized": 0,
+        "saved": 0,
+        "save_ignored": 0,
+        "failed": 0,
+    }
+
+    with httpx.Client(timeout=timeout) as client:
+        for category, items in fetched_by_category.items():
+            logger.info(
+                "category_batch_start",
+                extra={"event": "category_batch_start", "category": category},
+            )
+            if not items:
+                logger.info(
+                    "category_no_items",
+                    extra={"event": "category_no_items", "category": category},
+                )
+                continue
+
+            stats["fetched_total"] += len(items)
+            links = [item["link"] for item in items if item.get("link")]
+            existing_links = get_existing_links(links)
+            fresh_items: List[Dict[str, str]] = [
+                item for item in items if item.get("link") and item["link"] not in existing_links
+            ]
+
+            already_count = len(items) - len(fresh_items)
+            stats["already_saved"] += already_count
+            stats["to_summarize"] += len(fresh_items)
+            logger.info(
+                "category_fetch_stats",
+                extra={
+                    "event": "category_fetch_stats",
+                    "category": category,
+                    "fetched": len(items),
+                    "already_saved": already_count,
+                    "to_summarize": len(fresh_items),
+                },
+            )
+
+            if not fresh_items:
+                continue
+
+            try:
+                payload: Dict[str, Any] = {
+                    "items": [
+                        {
+                            "title": it["title"],
+                            "link": it["link"],
+                            "category": it.get("category", category),
+                        }
+                        for it in fresh_items
+                    ]
+                }
+                body = _post_summarize_with_retries(
+                    client,
+                    url,
+                    payload,
+                    category=category,
+                    item_count=len(fresh_items),
+                    max_extra_tries=max_extra,
+                )
+                summaries = body.get("summaries")
+                if not isinstance(summaries, list):
+                    raise RuntimeError("summarizer 응답에 'summaries' 배열이 없습니다.")
+                if len(summaries) != len(fresh_items):
+                    raise RuntimeError(
+                        f"요약 개수 불일치: 요청 {len(fresh_items)}건, 응답 {len(summaries)}건"
+                    )
+
+                for news, summary_text in zip(fresh_items, summaries):
+                    if not isinstance(summary_text, str):
+                        raise RuntimeError("요약 항목이 문자열이 아닙니다.")
+                    inserted = save_news(
+                        {
+                            "category": news["category"],
+                            "title": news["title"],
+                            "summary": summary_text,
+                            "link": news["link"],
+                            "batch_date_kst": (batch_metadata or {}).get("batch_date_kst"),
+                            "scheduled_run_time_kst": (batch_metadata or {}).get(
+                                "scheduled_run_time_kst"
+                            ),
+                            "collected_at_kst": (batch_metadata or {}).get("collected_at_kst"),
+                        }
+                    )
+                    stats["summarized"] += 1
+                    if inserted:
+                        stats["saved"] += 1
+                        logger.info(
+                            "news_saved",
+                            extra={
+                                "event": "news_saved",
+                                "category": news["category"],
+                                "title": news["title"],
+                                "link": news["link"],
+                            },
+                        )
+                    else:
+                        stats["save_ignored"] += 1
+                        logger.info(
+                            "news_save_skipped_duplicate",
+                            extra={
+                                "event": "news_save_skipped_duplicate",
+                                "category": news["category"],
+                                "title": news["title"],
+                                "link": news["link"],
+                            },
+                        )
+            except httpx.HTTPStatusError as exc:
+                stats["failed"] += 1
+                body = (exc.response.text[:2000] if exc.response is not None else "") or ""
+                logger.error(
+                    "category_pipeline_http_failed",
+                    extra={
+                        "event": "category_pipeline_http_failed",
+                        "category": category,
+                        "error": str(exc),
+                        "response_body_preview": body.strip()[:1500] if body.strip() else None,
+                    },
+                )
+            except Exception as exc:
+                stats["failed"] += 1
+                logger.exception(
+                    "category_pipeline_failed",
+                    extra={"event": "category_pipeline_failed", "category": category, "error": str(exc)},
+                )
+
+    return stats
+
+
+def run_pipeline_once(*, scheduled_run_time: datetime | None = None) -> Dict[str, int]:
+    resolved = (os.environ.get("SUMMARIZER_URL") or DEFAULT_SUMMARIZER_URL).rstrip("/")
+    if not resolved.endswith("/summarize"):
+        resolved = f"{resolved}/summarize"
+    batch_metadata = _build_batch_metadata(scheduled_run_time=scheduled_run_time)
+
+    logger.info(
+        "pipeline_start",
+        extra={
+            "event": "pipeline_start",
+            "summarizer_url": resolved,
+            "batch_date_kst": batch_metadata["batch_date_kst"],
+            "scheduled_run_time_kst": batch_metadata["scheduled_run_time_kst"],
+        },
+    )
+    summary = run_pipeline(batch_metadata=batch_metadata)
+    logger.info(
+        "pipeline_summary",
+        extra={
+            "event": "pipeline_summary",
+            "stats": summary,
+            "stats_json": json.dumps(summary, ensure_ascii=False),
+            "batch_date_kst": batch_metadata["batch_date_kst"],
+            "scheduled_run_time_kst": batch_metadata["scheduled_run_time_kst"],
+        },
+    )
+    return summary
+
+
+def _scheduled_pipeline_job() -> Dict[str, int]:
+    scheduled_slot = datetime.now(SCHEDULER_TIMEZONE).replace(
+        hour=FETCH_CRON_HOUR_KST,
+        minute=FETCH_CRON_MINUTE_KST,
+        second=0,
+        microsecond=0,
+    )
+    return run_pipeline_once(scheduled_run_time=scheduled_slot)
+
+
+def build_scheduler() -> BlockingScheduler:
+    scheduler = BlockingScheduler(timezone=SCHEDULER_TIMEZONE)
+    register_scheduler_logging(
+        scheduler,
+        logger,
+        service_name="news-fetcher",
+    )
+    job = scheduler.add_job(
+        _scheduled_pipeline_job,
+        trigger=CronTrigger(
+            hour=FETCH_CRON_HOUR_KST,
+            minute=FETCH_CRON_MINUTE_KST,
+            timezone=SCHEDULER_TIMEZONE,
+        ),
+        id="news-fetcher-pipeline",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=60 * 60,
+    )
+    logger.info(
+        "scheduler_configured",
+        extra={
+            "event": "scheduler_configured",
+            "service": "news-fetcher",
+            "timezone": str(SCHEDULER_TIMEZONE),
+            "scheduler_timezone": str(SCHEDULER_TIMEZONE),
+            "fetch_cron_hour_kst": FETCH_CRON_HOUR_KST,
+            "fetch_cron_minute_kst": FETCH_CRON_MINUTE_KST,
+            "next_run_time": getattr(job, "next_run_time", None),
+        },
+    )
+    return scheduler
+
+
+if __name__ == "__main__":
+    if _env_bool("ENABLE_SCHEDULER", True):
+        scheduler = build_scheduler()
+        try:
+            scheduler.start()
+        except (KeyboardInterrupt, SystemExit):
+            logger.info(
+                "scheduler_stopped",
+                extra={"event": "scheduler_stopped", "service": "news-fetcher"},
+            )
+    else:
+        run_pipeline_once()

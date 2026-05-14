@@ -28,6 +28,7 @@ Thumbs.db
 .idea/
 
 # Databases / local artifacts
+*.db
 *.sqlite
 *.sqlite3
 

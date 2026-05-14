@@ -10,9 +10,9 @@ class MailSendLog(Base):
     __tablename__ = "mail_send_logs"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    to_email: Mapped[s= mapped_column(String(128), index=True)
+    to_email: Mapped[str] = mapped_column(String(128), index=True)
     subject: Mapped[str] = mapped_column(String(255), index=True)
-    token: Mapped[str] tr] = mapped_column(String(255))
+    token: Mapped[str] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(20), index=True)  # sent | failed
     error: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
