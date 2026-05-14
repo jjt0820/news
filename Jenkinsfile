@@ -32,9 +32,9 @@ pipeline {
       steps {
         sh '''
           pip3 install flake8
-          flake8 backend/mail-service --max-line-length=100
-          flake8 backend/news-service --max-line-length=100
-          flake8 backend/user-service --max-line-length=100
+          /var/lib/jenkins/.local/bin/flake8 backend/mail-service --max-line-length=100
+          /var/lib/jenkins/.local/bin/flake8 backend/news-service --max-line-length=100
+          /var/lib/jenkins/.local/bin/flake8 backend/user-service --max-line-length=100
         '''
       }
     }
@@ -85,20 +85,20 @@ pipeline {
   }
 
   //완료 후 처리
-  post {
-    success {
-      sh '''
-        curl -X POST $SLACK_WEBHOOK_URL \
-        -H 'Content-type: application/json' \
-        -d '{"text":"✅ *[patrasche]* 배포 완료!\n커밋: $IMAGE_TAG\n작업자: $GIT_COMMITTER_NAME"}'
-      '''
-    }
-    failure {
-      sh '''
-        curl -X POST $SLACK_WEBHOOK_URL \
-        -H 'Content-type: application/json' \
-        -d '{"text":"❌ *[patrasche]* 배포 실패!\n확인 필요"}'
-      '''
-    }
-  }
+//   post {
+//     success {
+//       sh '''
+//         curl -X POST $SLACK_WEBHOOK_URL \
+//         -H 'Content-type: application/json' \
+//         -d '{"text":"✅ *[patrasche]* 배포 완료!\n커밋: $IMAGE_TAG\n작업자: $GIT_COMMITTER_NAME"}'
+//       '''
+//     }
+//     failure {
+//       sh '''
+//         curl -X POST $SLACK_WEBHOOK_URL \
+//         -H 'Content-type: application/json' \
+//         -d '{"text":"❌ *[patrasche]* 배포 실패!\n확인 필요"}'
+//       '''
+//     }
+//   }
 }
