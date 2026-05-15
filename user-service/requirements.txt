@@ -6,3 +6,4 @@ pydantic-settings>=2.6.0
 email-validator>=2.2.0
 httpx>=0.28.0
 apscheduler
+pytest>=8.0.0

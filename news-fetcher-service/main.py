@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import httpx
+from fastapi import FastAPI
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
@@ -26,6 +27,14 @@ load_dotenv(_SERVICE_DIR / ".env")
 load_dotenv()
 
 logger = setup_service_logging("news-fetcher")
+
+app = FastAPI(title="News Fetcher Service", version="0.1.0")
+
+
+@app.get("/health")
+def health_check() -> dict[str, str]:
+    return {"status": "ok"}
+
 
 DEFAULT_SUMMARIZER_URL = "http://localhost:8004/summarize"
 DEFAULT_HTTP_TIMEOUT_SECONDS = 600.0

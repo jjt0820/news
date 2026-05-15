@@ -503,6 +503,11 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="Mail Service", version="0.1.0", lifespan=lifespan)
 
 
+@app.get("/health")
+def health_check() -> dict[str, str]:
+    return {"status": "ok"}
+
+
 @app.post("/send-verify-email", status_code=status.HTTP_202_ACCEPTED)
 async def send_verify_email(payload: VerifyEmailRequest, db: Session = Depends(get_db)):
     subject = "이메일 인증을 완료해주세요"
