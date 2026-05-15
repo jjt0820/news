@@ -1,0 +1,9 @@
+python-dotenv
+google-generativeai
+sqlalchemy>=2.0.36
+fastapi
+uvicorn[standard]
+apscheduler
+pytest>=8.0.0
+httpx>=0.28.0
+anyio[trio]
