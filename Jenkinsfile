@@ -9,6 +9,7 @@ pipeline {
     AWS_ACCESS_KEY_ID = credentials('AWS_ACCESS_KEY_ID')
     AWS_SECRET_ACCESS_KEY = credentials('AWS_SECRET_ACCESS_KEY')
     IMAGE_TAG = "${GIT_COMMIT}"
+    IAM_ROLE_ARN = credentials('IAM_ROLE_ARN')
   }
   //실행할 단계들
   //민감정보 스캔
@@ -100,7 +101,7 @@ pipeline {
           ansible-playbook \
             -i ansible/inventory.ini \
             ansible/deploy.yml \
-            --extra-vars "image_tag=$IMAGE_TAG ecr_registry=$ECR_REGISTRY"
+            --extra-vars "image_tag=$IMAGE_TAG ecr_registry=$ECR_REGISTRY iam_role_arn=$IAM_ROLE_ARN"
         '''
       } //ansible-playbook = 플레이북 실행
         // -i inventory.ini = 대상 서버 목록

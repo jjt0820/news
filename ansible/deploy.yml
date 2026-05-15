@@ -9,7 +9,9 @@
       shell: |
         aws eks update-kubeconfig \
           --name {{ eks_cluster }} \
-          --region ap-northeast-2
+          --region ap-northeast-2 \
+          --role-arn {{ iam_role_arn }}
+
 
     - name: 웹서빙 파드 이미지 업데이트
       shell: |
