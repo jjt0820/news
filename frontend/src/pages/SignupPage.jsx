@@ -27,7 +27,7 @@ export default function SignupPage({ onSignup }) {
     if (selected.length === 0) return alert('카테고리를 하나 이상 선택해주세요')
     
     try {
-      const response = await fetch('/subscribe', {
+      const response = await fetch('cogez-alb-518575871.ap-northeast-2.elb.amazonaws.com', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, categories: selected })

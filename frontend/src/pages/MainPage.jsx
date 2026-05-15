@@ -15,7 +15,7 @@ export default function MainPage() {
   // TODO: API 서버 주소 확정되면 앞에 주소 추가
   // 예) http://ALB주소/api/news/list?category=tech
   useEffect(()=> {
-    fetch(`/api/news/list?category=${activeTab}`)
+    fetch(`cogez-alb-518575871.ap-northeast-2.elb.amazonaws.com/api/news/list?category=${activeTab}`)
       .then(res => res.json())
       .then(data => setNews(data))
       .catch(err => {
