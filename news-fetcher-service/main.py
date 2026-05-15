@@ -4,15 +4,16 @@ import json
 import os
 import random
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
 import httpx
-from fastapi import FastAPI
-from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
+from fastapi import FastAPI
 
 from fetcher import DEFAULT_NEWS_LIMIT, fetch_latest_news_all_categories
 from json_logging import (
@@ -26,13 +27,8 @@ load_dotenv(_SERVICE_DIR / ".env")
 load_dotenv()
 
 logger = setup_service_logging("news-fetcher")
-
-app = FastAPI(title="News Fetcher Service", version="0.1.0")
-
-
-@app.get("/health")
-def health_check() -> dict[str, str]:
-    return {"status": "ok"}
+scheduler = AsyncIOScheduler(timezone=SCHEDULER_TIMEZONE)
+register_scheduler_logging(scheduler, logger, service_name="news-fetcher")
 
 
 DEFAULT_SUMMARIZER_URL = "http://localhost:8004/summarize"
@@ -451,13 +447,13 @@ def _scheduled_pipeline_job() -> Dict[str, int]:
     return run_pipeline_once(scheduled_run_time=scheduled_slot)
 
 
-def build_scheduler() -> BlockingScheduler:
-    scheduler = BlockingScheduler(timezone=SCHEDULER_TIMEZONE)
-    register_scheduler_logging(
-        scheduler,
-        logger,
-        service_name="news-fetcher",
-    )
+def _format_next_run_time(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.astimezone(SCHEDULER_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _configure_scheduler_jobs() -> None:
     job = scheduler.add_job(
         _scheduled_pipeline_job,
         trigger=CronTrigger(
@@ -480,47 +476,79 @@ def build_scheduler() -> BlockingScheduler:
             "scheduler_timezone": str(SCHEDULER_TIMEZONE),
             "fetch_cron_hour_kst": FETCH_CRON_HOUR_KST,
             "fetch_cron_minute_kst": FETCH_CRON_MINUTE_KST,
-            "next_run_time": getattr(job, "next_run_time", None),
+            "next_run_time": _format_next_run_time(getattr(job, "next_run_time", None)),
         },
     )
-    return scheduler
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    scheduler_enabled = _env_bool("ENABLE_SCHEDULER", True)
+    if scheduler_enabled:
+        _configure_scheduler_jobs()
+        if not scheduler.running:
+            scheduler.start()
+        logger.info(
+            "service_startup",
+            extra={
+                "event": "service_startup",
+                "scheduler_enabled": True,
+                "scheduler_timezone": str(SCHEDULER_TIMEZONE),
+                "fetch_cron_hour_kst": FETCH_CRON_HOUR_KST,
+                "fetch_cron_minute_kst": FETCH_CRON_MINUTE_KST,
+            },
+        )
+    else:
+        logger.info(
+            "service_startup",
+            extra={
+                "event": "service_startup",
+                "scheduler_enabled": False,
+            },
+        )
+    try:
+        yield
+    finally:
+        if scheduler.running:
+            logger.info(
+                "scheduler_shutdown_start",
+                extra={
+                    "event": "scheduler_shutdown_start",
+                    "service": "news-fetcher",
+                    "wait_for_running_jobs": True,
+                },
+            )
+            scheduler.shutdown(wait=True)
+            logger.info(
+                "scheduler_stopped",
+                extra={"event": "scheduler_stopped", "service": "news-fetcher"},
+            )
+
+
+app = FastAPI(title="News Fetcher Service", version="0.1.0", lifespan=lifespan)
+
+
+@app.get("/health")
+def health_check() -> dict[str, str]:
+    return {"status": "ok"}
 
 
 if __name__ == "__main__":
-    if _env_bool("ENABLE_SCHEDULER", True):
-        import threading
+    import uvicorn
 
-        import uvicorn
-
-        scheduler = build_scheduler()
-
-        def _run_scheduler() -> None:
-            try:
-                scheduler.start()
-            except (KeyboardInterrupt, SystemExit):
-                logger.info(
-                    "scheduler_stopped",
-                    extra={"event": "scheduler_stopped", "service": "news-fetcher"},
-                )
-
-        threading.Thread(
-            target=_run_scheduler,
-            name="news-fetcher-scheduler",
-            daemon=True,
-        ).start()
-
-        host = os.getenv("HOST", "0.0.0.0").strip() or "0.0.0.0"
-        raw_port = os.getenv("PORT", "8003")
-        try:
-            port = int(raw_port) if str(raw_port).strip() else 8003
-        except ValueError:
-            port = 8003
-
-        uvicorn.run(
-            "main:app",
-            host=host,
-            port=port,
-            reload=False,
-        )
-    else:
+    if not _env_bool("ENABLE_SCHEDULER", True):
         run_pipeline_once()
+
+    host = os.getenv("HOST", "0.0.0.0").strip() or "0.0.0.0"
+    raw_port = os.getenv("PORT", "8003")
+    try:
+        port = int(raw_port) if str(raw_port).strip() else 8003
+    except ValueError:
+        port = 8003
+
+    uvicorn.run(
+        "main:app",
+        host=host,
+        port=port,
+        reload=False,
+    )
