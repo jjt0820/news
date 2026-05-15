@@ -56,16 +56,16 @@ pipeline {
           PYTEST=/var/lib/jenkins/.local/bin/pytest
           pip3 install anyio[trio]
 
-          pip3 install -r mail-service/requirements.txt
+          pip3 install -r backend/mail-service/requirements.txt
           cd mail-service && $PYTEST ../backend/mail-service/tests/ -v && cd ..
 
-          pip3 install -r news-fetcher-service/requirements.txt
+          pip3 install -r backend/news-fetcher-service/requirements.txt
           cd news-fetcher-service && $PYTEST ../backend/news-fetcher-service/tests/ -v && cd ..
 
-          pip3 install -r news-summarizer-service/requirements.txt
+          pip3 install -r backend/news-summarizer-service/requirements.txt
           cd news-summarizer-service && $PYTEST ../backend/news-summarizer-service/tests/ -v && cd ..
 
-          pip3 install -r user-service/requirements.txt
+          pip3 install -r backend/user-service/requirements.txt
           cd user-service && $PYTEST ../backend/user-service/tests/ -v && cd ..
         '''
       }
