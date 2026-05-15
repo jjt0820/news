@@ -6,6 +6,8 @@ pipeline {
   environment {
     ECR_REGISTRY = credentials('ECR_REGISTRY')
     SLACK_WEBHOOK_URL = credentials('SLACK_WEBHOOK_URL')
+    AWS_ACCESS_KEY_ID = credentials('AWS_ACCESS_KEY_ID')
+    AWS_SECRET_ACCESS_KEY = credentials('AWS_SECRET_ACCESS_KEY')
     IMAGE_TAG = "${GIT_COMMIT}"
   }
   //실행할 단계들
@@ -32,35 +34,58 @@ pipeline {
       steps {
         sh '''
           pip3 install flake8
-          /var/lib/jenkins/.local/bin/flake8 backend/mail-service --max-line-length=100
-          /var/lib/jenkins/.local/bin/flake8 backend/news-service --max-line-length=100
-          /var/lib/jenkins/.local/bin/flake8 backend/user-service --max-line-length=100
+          /var/lib/jenkins/.local/bin/flake8 mail-service --max-line-length=100
+          /var/lib/jenkins/.local/bin/flake8 news-fetcher-service --max-line-length=100
+          /var/lib/jenkins/.local/bin/flake8 news-summarizer-service --max-line-length=100
+          /var/lib/jenkins/.local/bin/flake8 user-service --max-line-length=100
         '''
       }
     }
     //pytest = Python 테스트 실행(서비스 3개 각각 검사)
-    // stage('테스트') {
-    //   steps {
-    //     sh '''
-    //       pip3 install pytest
-    //       /var/lib/jenkins/.local/bin/pytest backend/mail-service/tests/ -v
-    //       /var/lib/jenkins/.local/bin/pytest backend/news-service/tests/ -v
-    //       /var/lib/jenkins/.local/bin/pytest backend/user-service/tests/ -v
-    //     '''
-    //   }
-    // }
+    stage('테스트') {
+      environment {
+        DB_URL = credentials('DB_URL')
+        SMTP_HOST = credentials('SMTP_HOST')
+        SMTP_PORT = credentials('SMTP_PORT')
+        SMTP_USER = credentials('SMTP_USER')
+        SMTP_PASS = credentials('SMTP_PASS')
+
+      }
+      steps {
+        sh '''
+          PYTEST=/var/lib/jenkins/.local/bin/pytest
+          pip3 install anyio[trio]
+
+          pip3 install -r mail-service/requirements.txt
+          cd mail-service && $PYTEST ../backend/mail-service/tests/ -v && cd ..
+
+          pip3 install -r news-fetcher-service/requirements.txt
+          cd news-fetcher-service && $PYTEST ../backend/news-fetcher-service/tests/ -v && cd ..
+
+          pip3 install -r news-summarizer-service/requirements.txt
+          cd news-summarizer-service && $PYTEST ../backend/news-summarizer-service/tests/ -v && cd ..
+
+          pip3 install -r user-service/requirements.txt
+          cd user-service && $PYTEST ../backend/user-service/tests/ -v && cd ..
+        '''
+      }
+    }
 
     stage('도커 빌드 & ECR 푸시') {
       steps {
         sh '''
           aws ecr get-login-password --region ap-northeast-2 | docker login --username AWS --password-stdin $ECR_REGISTRY
-          docker build -t $ECR_REGISTRY/patrasche-notifier:$IMAGE_TAG ./backend/mail-service
+
+          docker build -t $ECR_REGISTRY/patrasche-notifier:$IMAGE_TAG ./mail-service
           docker push $ECR_REGISTRY/patrasche-notifier:$IMAGE_TAG
-          docker build -t $ECR_REGISTRY/patrasche-crawler:$IMAGE_TAG ./backend/news-service
+
+          docker build -t $ECR_REGISTRY/patrasche-crawler:$IMAGE_TAG ./news-fetcher-service
           docker push $ECR_REGISTRY/patrasche-crawler:$IMAGE_TAG
-          docker build -t $ECR_REGISTRY/patrasche-analyzer:$IMAGE_TAG ./backend/news-service
+
+          docker build -t $ECR_REGISTRY/patrasche-analyzer:$IMAGE_TAG ./news-summarizer-service
           docker push $ECR_REGISTRY/patrasche-analyzer:$IMAGE_TAG
-          docker build -t $ECR_REGISTRY/patrasche-backend:$IMAGE_TAG ./backend/user-service
+
+          docker build -t $ECR_REGISTRY/patrasche-backend:$IMAGE_TAG ./user-service
           docker push $ECR_REGISTRY/patrasche-backend:$IMAGE_TAG
         '''
       } // ECR 로그인
@@ -85,20 +110,20 @@ pipeline {
   }
 
   //완료 후 처리
-//   post {
-//     success {
-//       sh '''
-//         curl -X POST $SLACK_WEBHOOK_URL \
-//         -H 'Content-type: application/json' \
-//         -d '{"text":"✅ *[patrasche]* 배포 완료!\n커밋: $IMAGE_TAG\n작업자: $GIT_COMMITTER_NAME"}'
-//       '''
-//     }
-//     failure {
-//       sh '''
-//         curl -X POST $SLACK_WEBHOOK_URL \
-//         -H 'Content-type: application/json' \
-//         -d '{"text":"❌ *[patrasche]* 배포 실패!\n확인 필요"}'
-//       '''
-//     }
-//   }
-}
+    post {
+      success {
+        sh '''
+          curl -X POST $SLACK_WEBHOOK_URL \
+          -H 'Content-type: application/json' \
+          -d '{"text":"✅ *[patrasche]* 배포 완료!\n커밋: $IMAGE_TAG\n작업자: $GIT_COMMITTER_NAME"}'
+        '''
+      }
+      failure {
+        sh '''
+          curl -X POST $SLACK_WEBHOOK_URL \
+          -H 'Content-type: application/json' \
+          -d '{"text":"❌ *[patrasche]* 배포 실패!\n확인 필요"}'
+        '''
+      }
+    }
+  }
