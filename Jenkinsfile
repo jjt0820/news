@@ -85,8 +85,8 @@ pipeline {
           docker build -t $ECR_REGISTRY/patrasche-analyzer:$IMAGE_TAG ./news-summarizer-service
           docker push $ECR_REGISTRY/patrasche-analyzer:$IMAGE_TAG
 
-          docker build -t $ECR_REGISTRY/patrasche-backend:$IMAGE_TAG ./user-service
-          docker push $ECR_REGISTRY/patrasche-backend:$IMAGE_TAG
+          docker build -t $ECR_REGISTRY/patrasche-webserving:$IMAGE_TAG ./user-service
+          docker push $ECR_REGISTRY/patrasche-webserving:$IMAGE_TAG
         '''
       } // ECR 로그인
             // ->서비스별 이미지 빌드
@@ -100,7 +100,7 @@ pipeline {
           ansible-playbook \
             -i ansible/inventory.ini \
             ansible/deploy.yml \
-            --extra-vars "image_tag=$IMAGE_TAG"
+            --extra-vars "image_tag=$IMAGE_TAG ecr_registry=$ECR_REGISTRY"
         '''
       } //ansible-playbook = 플레이북 실행
         // -i inventory.ini = 대상 서버 목록
@@ -122,7 +122,7 @@ pipeline {
         sh '''
           curl -X POST $SLACK_WEBHOOK_URL \
           -H 'Content-type: application/json' \
-          -d '{"text":"❌ *[patrasche]* 배포 실패!\n확인 필요"}'
+          -d '{"text":"❌ *[patrasche]* 배포 실패!\n확인 불필요"}'
         '''
       }
     }
