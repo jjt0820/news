@@ -19,7 +19,7 @@ from json_logging import (
     uvicorn_log_config,
 )
 from models import Subscription
-from schemas import SubscribeCreate, SubscribeResponse
+from schemas import InternalSubscriberOut, SubscribeCreate, SubscribeResponse
 
 MAIL_SERVICE_URL = os.environ.get("MAIL_SERVICE_URL", "http://localhost:8002").rstrip("/")
 DEFAULT_SCHEDULER_HEARTBEAT_MINUTES = 60
@@ -97,15 +97,6 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="User Service", version="0.1.0", lifespan=lifespan)
 
 
-@app.get("/health")
-def health_check():
-    logger.info(
-        "Health check requested",
-        extra={"event": "health_check_requested"},
-    )
-    return {"status": "ok"}
-
-
 def _serialize_categories(categories: list[str]) -> str:
     cleaned = [c.strip() for c in categories if c and c.strip()]
     return ",".join(cleaned)
@@ -115,6 +106,33 @@ def _deserialize_categories(category_csv: str) -> list[str]:
     if not category_csv:
         return []
     return [c.strip() for c in category_csv.split(",") if c.strip()]
+
+
+@app.get("/health")
+def health_check():
+    logger.info(
+        "Health check requested",
+        extra={"event": "health_check_requested"},
+    )
+    return {"status": "ok"}
+
+
+@app.get("/internal/subscribers", response_model=list[InternalSubscriberOut])
+def internal_subscribers(db: Session = Depends(get_db)):
+    """인증 완료 구독자 목록 (mail-service 뉴스레터 등 내부 연동용)."""
+    rows = (
+        db.query(Subscription)
+        .filter(Subscription.is_verified.is_(True))
+        .order_by(Subscription.id.asc())
+        .all()
+    )
+    return [
+        InternalSubscriberOut(
+            email=r.email,
+            interest_categories=_deserialize_categories(r.category or ""),
+        )
+        for r in rows
+    ]
 
 
 def _format_categories_for_popup(categories: list[str]) -> str:
