@@ -1,17 +1,24 @@
 from __future__ import annotations
 
-import logging
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from database import (
+    Base,
+    engine,
+    ensure_news_schema,
+    get_existing_links,
+    list_newsletter_rows_for_batch,
+    save_news,
+)
 from json_logging import (
     SCHEDULER_TIMEZONE,
     register_scheduler_logging,
@@ -80,6 +87,8 @@ def _configure_scheduler_jobs() -> int:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    Base.metadata.create_all(bind=engine)
+    ensure_news_schema()
     interval_minutes = _configure_scheduler_jobs()
     if not scheduler.running:
         scheduler.start()
@@ -123,6 +132,46 @@ class SummarizeResponse(BaseModel):
 def health() -> Dict[str, str]:
     logger.info("health_check", extra={"event": "health_check"})
     return {"status": "ok"}
+
+
+class NewsCreateBody(BaseModel):
+    category: str
+    title: str
+    summary: str
+    link: str
+    batch_date_kst: Optional[str] = None
+    scheduled_run_time_kst: Optional[str] = None
+    collected_at_kst: Optional[str] = None
+
+
+class NewsCreateResponse(BaseModel):
+    inserted: bool
+
+
+@app.post("/news", response_model=NewsCreateResponse)
+def create_news_record(body: NewsCreateBody) -> NewsCreateResponse:
+    try:
+        inserted = save_news(body.model_dump())
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return NewsCreateResponse(inserted=inserted)
+
+
+@app.get("/news")
+def read_news(
+    batch_date: Optional[date] = None,
+    links: Annotated[Optional[list[str]], Query()] = None,
+) -> Dict[str, Any]:
+    if batch_date is not None:
+        rows = list_newsletter_rows_for_batch(batch_date)
+        return {"items": rows}
+    if links:
+        existing = get_existing_links(links)
+        return {"existing_links": sorted(existing)}
+    raise HTTPException(
+        status_code=400,
+        detail="batch_date 또는 links 쿼리 파라미터가 필요합니다.",
+    )
 
 
 @app.post("/summarize", response_model=SummarizeResponse)

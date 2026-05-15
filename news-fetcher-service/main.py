@@ -14,7 +14,6 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
 
-from database import get_existing_links, save_news
 from fetcher import DEFAULT_NEWS_LIMIT, fetch_latest_news_all_categories
 from json_logging import (
     SCHEDULER_TIMEZONE,
@@ -37,10 +36,44 @@ def health_check() -> dict[str, str]:
 
 
 DEFAULT_SUMMARIZER_URL = "http://localhost:8004/summarize"
+DEFAULT_NEWS_STORE_BASE_URL = "http://localhost:8004"
+NEWS_STORE_HTTP_TIMEOUT = 60.0
 DEFAULT_HTTP_TIMEOUT_SECONDS = 600.0
 DEFAULT_HTTP_RETRIES_ON_QUOTA = 3
 FETCH_CRON_HOUR_KST = 6
 FETCH_CRON_MINUTE_KST = 0
+
+
+def _news_store_base_url() -> str:
+    return (os.getenv("NEWS_STORE_BASE_URL") or DEFAULT_NEWS_STORE_BASE_URL).rstrip("/")
+
+
+def _http_get_existing_links(client: httpx.Client, links: List[str]) -> set[str]:
+    clean = [str(link).strip() for link in links if str(link).strip()]
+    if not clean:
+        return set()
+    params = [("links", lk) for lk in clean]
+    timeout = _env_float("NEWS_STORE_HTTP_TIMEOUT_SECONDS", NEWS_STORE_HTTP_TIMEOUT)
+    response = client.get(
+        f"{_news_store_base_url()}/news",
+        params=params,
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    data = response.json()
+    return set(data.get("existing_links", []))
+
+
+def _http_post_news(client: httpx.Client, body: Dict[str, Any]) -> bool:
+    timeout = _env_float("NEWS_STORE_HTTP_TIMEOUT_SECONDS", NEWS_STORE_HTTP_TIMEOUT)
+    response = client.post(
+        f"{_news_store_base_url()}/news",
+        json=body,
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    return bool(payload.get("inserted"))
 
 
 def _env_int(key: str, default: int) -> int:
@@ -203,9 +236,9 @@ def run_pipeline(
 ) -> Dict[str, int]:
     """
     1) 카테고리별 뉴스 수집
-    2) DB에 이미 있는 링크 선필터링
+    2) news-summarizer HTTP GET /news 로 이미 저장된 링크 선필터링
     3) 신규 뉴스를 summarizer HTTP API로 요약 요청(429/502 시 재시도)
-    4) 요약 결과 DB 저장
+    4) 요약 결과를 news-summarizer POST /news 로 저장
     """
     effective_limit = (
         per_category_limit
@@ -232,6 +265,7 @@ def run_pipeline(
         extra={
             "event": "pipeline_run_start",
             "summarizer_url": url,
+            "news_store_base_url": _news_store_base_url(),
             "news_per_category_limit": effective_limit,
             "summarizer_http_max_extra_tries": max_extra,
             "http_timeout_seconds": timeout,
@@ -267,7 +301,7 @@ def run_pipeline(
 
             stats["fetched_total"] += len(items)
             links = [item["link"] for item in items if item.get("link")]
-            existing_links = get_existing_links(links)
+            existing_links = _http_get_existing_links(client, links)
             fresh_items: List[Dict[str, str]] = [
                 item for item in items if item.get("link") and item["link"] not in existing_links
             ]
@@ -319,7 +353,8 @@ def run_pipeline(
                 for news, summary_text in zip(fresh_items, summaries):
                     if not isinstance(summary_text, str):
                         raise RuntimeError("요약 항목이 문자열이 아닙니다.")
-                    inserted = save_news(
+                    inserted = _http_post_news(
+                        client,
                         {
                             "category": news["category"],
                             "title": news["title"],
@@ -330,7 +365,7 @@ def run_pipeline(
                                 "scheduled_run_time_kst"
                             ),
                             "collected_at_kst": (batch_metadata or {}).get("collected_at_kst"),
-                        }
+                        },
                     )
                     stats["summarized"] += 1
                     if inserted:
@@ -453,13 +488,39 @@ def build_scheduler() -> BlockingScheduler:
 
 if __name__ == "__main__":
     if _env_bool("ENABLE_SCHEDULER", True):
+        import threading
+
+        import uvicorn
+
         scheduler = build_scheduler()
+
+        def _run_scheduler() -> None:
+            try:
+                scheduler.start()
+            except (KeyboardInterrupt, SystemExit):
+                logger.info(
+                    "scheduler_stopped",
+                    extra={"event": "scheduler_stopped", "service": "news-fetcher"},
+                )
+
+        threading.Thread(
+            target=_run_scheduler,
+            name="news-fetcher-scheduler",
+            daemon=True,
+        ).start()
+
+        host = os.getenv("HOST", "0.0.0.0").strip() or "0.0.0.0"
+        raw_port = os.getenv("PORT", "8003")
         try:
-            scheduler.start()
-        except (KeyboardInterrupt, SystemExit):
-            logger.info(
-                "scheduler_stopped",
-                extra={"event": "scheduler_stopped", "service": "news-fetcher"},
-            )
+            port = int(raw_port) if str(raw_port).strip() else 8003
+        except ValueError:
+            port = 8003
+
+        uvicorn.run(
+            "main:app",
+            host=host,
+            port=port,
+            reload=False,
+        )
     else:
         run_pipeline_once()

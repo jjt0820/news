@@ -1,21 +1,23 @@
-"""DB 연결. SQLite(`user_db`) 기본값 — MySQL 전환 시 `DATABASE_URL`만 바꾸면 됩니다."""
+"""SQLAlchemy 엔진. `DATABASE_URL`로 연결 (SQLite 기본, MySQL 등으로 교체 가능)."""
+
+from __future__ import annotations
+
+import os
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
-# SQLite: 로컬 파일 ./user_db.sqlite
-# MySQL 예: mysql+pymysql://user:pass@host:3306/dbname
-SQLALCHEMY_DATABASE_URL = "sqlite:///./user_db.sqlite"
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./user_db.sqlite").strip()
 
-# SQLite는 단일 스레드 체크 완화(필요 시 조정)
-connect_args = {"check_same_thread": False} if SQLALCHEMY_DATABASE_URL.startswith(
-    "sqlite"
-) else {}
+_connect_args: dict = {}
+if DATABASE_URL.startswith("sqlite"):
+    _connect_args = {"check_same_thread": False}
 
 engine = create_engine(
-    SQLALCHEMY_DATABASE_URL,
-    connect_args=connect_args,
+    DATABASE_URL,
+    connect_args=_connect_args,
     echo=False,
+    pool_pre_ping=not DATABASE_URL.startswith("sqlite"),
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

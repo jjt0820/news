@@ -29,3 +29,10 @@ class SubscribeResponse(BaseModel):
     message: str
     email: str
     category: str
+
+
+class InternalSubscriberOut(BaseModel):
+    """mail-service 등 내부 연동용 구독자 스냅샷."""
+
+    email: str
+    interest_categories: List[str] = Field(default_factory=list)

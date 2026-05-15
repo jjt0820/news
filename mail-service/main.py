@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import os
-import sqlite3
 from contextlib import asynccontextmanager
-from datetime import date, datetime, time, timedelta, timezone
+from collections.abc import Mapping
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import Depends, FastAPI, HTTPException, status
@@ -25,7 +26,6 @@ from models import MailSendLog
 from schemas import NewsCardItem, NewsSummaryEmailRequest, VerifyEmailRequest
 from settings import settings
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FETCH_BATCH_HOUR_KST = 6
 NEWSLETTER_CRON_HOUR_KST = 7
 NEWSLETTER_CRON_MINUTE_KST = 0
@@ -47,41 +47,6 @@ def _format_kst_datetime(value: datetime | None) -> str | None:
     return value.astimezone(SCHEDULER_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _resolve_external_db_path(raw_value: str | None, default_path: Path) -> Path:
-    if raw_value and raw_value.strip():
-        candidate = Path(raw_value.strip()).expanduser()
-        return candidate if candidate.is_absolute() else (PROJECT_ROOT / candidate).resolve()
-    return default_path.resolve()
-
-
-def _user_service_db_path() -> Path:
-    return _resolve_external_db_path(
-        settings.USER_SERVICE_DB_PATH,
-        PROJECT_ROOT / "user-service" / "user_db.sqlite",
-    )
-
-
-def _news_fetcher_db_path() -> Path:
-    return _resolve_external_db_path(
-        settings.NEWS_FETCHER_DB_PATH,
-        PROJECT_ROOT / "news-fetcher-service" / "news.db",
-    )
-
-
-def _connect_sqlite(db_path: Path) -> sqlite3.Connection:
-    if not db_path.exists():
-        raise RuntimeError(f"DB 파일을 찾을 수 없습니다: {db_path}")
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def _deserialize_categories(category_csv: str) -> list[str]:
-    if not category_csv:
-        return []
-    return [category.strip() for category in category_csv.split(",") if category.strip()]
-
-
 def _newsletter_batch_token(batch_date: date) -> str:
     return f"NEWSLETTER:{batch_date.isoformat()}"
 
@@ -96,43 +61,30 @@ def _render_template(template_name: str, context: dict[str, Any]) -> str:
 
 
 def _load_active_subscribers() -> list[dict[str, Any]]:
-    conn = _connect_sqlite(_user_service_db_path())
-    try:
-        rows = conn.execute(
-            """
-            SELECT email, category
-            FROM subscriptions
-            WHERE is_verified = 1
-            ORDER BY id ASC
-            """
-        ).fetchall()
-        return [
-            {
-                "email": str(row["email"]),
-                "interest_categories": _deserialize_categories(str(row["category"] or "")),
-            }
-            for row in rows
-        ]
-    finally:
-        conn.close()
+    base = settings.USER_SERVICE_URL.rstrip("/")
+    with httpx.Client(timeout=30.0) as client:
+        response = client.get(f"{base}/internal/subscribers")
+        response.raise_for_status()
+        body = response.json()
+    if not isinstance(body, list):
+        raise RuntimeError("user-service /internal/subscribers 응답이 배열이 아닙니다.")
+    result: list[dict[str, Any]] = []
+    for item in body:
+        if not isinstance(item, dict):
+            continue
+        email = str(item.get("email", "")).strip()
+        if not email:
+            continue
+        raw_cats = item.get("interest_categories")
+        if isinstance(raw_cats, list):
+            categories = [str(c).strip() for c in raw_cats if str(c).strip()]
+        else:
+            categories = []
+        result.append({"email": email, "interest_categories": categories})
+    return result
 
 
-def _batch_window_utc(batch_date: date) -> tuple[str, str]:
-    batch_start_kst = datetime.combine(
-        batch_date,
-        time(hour=FETCH_BATCH_HOUR_KST, minute=0),
-        tzinfo=SCHEDULER_TIMEZONE,
-    )
-    batch_end_kst = batch_start_kst + timedelta(days=1)
-    batch_start_utc = batch_start_kst.astimezone(timezone.utc)
-    batch_end_utc = batch_end_kst.astimezone(timezone.utc)
-    return (
-        batch_start_utc.strftime("%Y-%m-%d %H:%M:%S"),
-        batch_end_utc.strftime("%Y-%m-%d %H:%M:%S"),
-    )
-
-
-def _row_display_time(row: sqlite3.Row) -> str:
+def _row_display_time(row: Mapping[str, Any]) -> str:
     scheduled_run_time_kst = str(row["scheduled_run_time_kst"] or "").strip()
     if scheduled_run_time_kst:
         return f"{scheduled_run_time_kst} KST"
@@ -140,49 +92,32 @@ def _row_display_time(row: sqlite3.Row) -> str:
 
 
 def _load_news_cards_by_category(batch_date: date) -> dict[str, list[NewsCardItem]]:
-    conn = _connect_sqlite(_news_fetcher_db_path())
-    try:
-        column_rows = conn.execute("PRAGMA table_info(summarized_news)").fetchall()
-        columns = {str(row["name"]) for row in column_rows}
-        rows: list[sqlite3.Row] = []
+    base = settings.NEWS_DATA_SERVICE_URL.rstrip("/")
+    with httpx.Client(timeout=60.0) as client:
+        response = client.get(
+            f"{base}/news",
+            params={"batch_date": batch_date.isoformat()},
+        )
+        response.raise_for_status()
+        payload = response.json()
+    rows = payload.get("items") or []
+    if not isinstance(rows, list):
+        raise RuntimeError("뉴스 API 응답에 'items' 배열이 없습니다.")
 
-        if "batch_date_kst" in columns:
-            rows = conn.execute(
-                """
-                SELECT category, title, summary, link, created_at, batch_date_kst, scheduled_run_time_kst
-                FROM summarized_news
-                WHERE batch_date_kst = ?
-                ORDER BY category ASC, id DESC
-                """,
-                (batch_date.isoformat(),),
-            ).fetchall()
-
-        if not rows:
-            batch_start_utc, batch_end_utc = _batch_window_utc(batch_date)
-            rows = conn.execute(
-                """
-                SELECT category, title, summary, link, created_at, NULL AS batch_date_kst, NULL AS scheduled_run_time_kst
-                FROM summarized_news
-                WHERE created_at >= ? AND created_at < ?
-                ORDER BY category ASC, id DESC
-                """,
-                (batch_start_utc, batch_end_utc),
-            ).fetchall()
-
-        news_by_category: dict[str, list[NewsCardItem]] = {}
-        for row in rows:
-            category = str(row["category"])
-            news_by_category.setdefault(category, []).append(
-                NewsCardItem(
-                    source=category,
-                    time=_row_display_time(row),
-                    title=str(row["title"]),
-                    summary=str(row["summary"]),
-                )
+    news_by_category: dict[str, list[NewsCardItem]] = {}
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        category = str(raw.get("category", ""))
+        news_by_category.setdefault(category, []).append(
+            NewsCardItem(
+                source=category,
+                time=_row_display_time(raw),
+                title=str(raw.get("title", "")),
+                summary=str(raw.get("summary", "")),
             )
-        return news_by_category
-    finally:
-        conn.close()
+        )
+    return news_by_category
 
 
 def _build_personalized_payload(
