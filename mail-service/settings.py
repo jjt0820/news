@@ -1,4 +1,9 @@
+from pydantic import ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from json_logging import setup_service_logging
+
+logger = setup_service_logging("mail-service")
 
 
 class Settings(BaseSettings):
@@ -20,5 +25,21 @@ class Settings(BaseSettings):
     NEWS_DATA_SERVICE_URL: str = "http://localhost:8004"
 
 
-settings = Settings()
+try:
+    settings = Settings()
+except ValidationError as exc:
+    missing = [
+        ".".join(str(part) for part in error.get("loc", ()))
+        for error in exc.errors()
+        if error.get("type") == "missing"
+    ]
+    logger.critical(
+        "required_environment_missing",
+        extra={
+            "event": "required_environment_missing",
+            "missing_env_vars": missing,
+            "error": str(exc),
+        },
+    )
+    raise
 

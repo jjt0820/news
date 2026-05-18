@@ -10,15 +10,18 @@ from typing import Any
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi_mail import ConnectionConfig, FastMail, MessageSchema, MessageType
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from database import Base, SessionLocal, engine, get_db
 from json_logging import (
     SCHEDULER_TIMEZONE,
     register_scheduler_logging,
+    reset_trace_id,
+    set_trace_id,
     setup_service_logging,
     uvicorn_log_config,
 )
@@ -62,10 +65,30 @@ def _render_template(template_name: str, context: dict[str, Any]) -> str:
 
 def _load_active_subscribers() -> list[dict[str, Any]]:
     base = settings.USER_SERVICE_URL.rstrip("/")
-    with httpx.Client(timeout=30.0) as client:
-        response = client.get(f"{base}/internal/subscribers")
-        response.raise_for_status()
-        body = response.json()
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.get(f"{base}/internal/subscribers")
+            response.raise_for_status()
+            body = response.json()
+    except httpx.TimeoutException as exc:
+        logger.error(
+            "user_service_subscribers_timeout",
+            extra={"event": "user_service_subscribers_timeout", "url": f"{base}/internal/subscribers", "error": str(exc)},
+        )
+        raise
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code if exc.response is not None else None
+        if status_code is not None and status_code >= 500:
+            logger.error(
+                "user_service_subscribers_5xx",
+                extra={
+                    "event": "user_service_subscribers_5xx",
+                    "url": f"{base}/internal/subscribers",
+                    "http_status": status_code,
+                    "error": str(exc),
+                },
+            )
+        raise
     if not isinstance(body, list):
         raise RuntimeError("user-service /internal/subscribers 응답이 배열이 아닙니다.")
     result: list[dict[str, Any]] = []
@@ -93,13 +116,33 @@ def _row_display_time(row: Mapping[str, Any]) -> str:
 
 def _load_news_cards_by_category(batch_date: date) -> dict[str, list[NewsCardItem]]:
     base = settings.NEWS_DATA_SERVICE_URL.rstrip("/")
-    with httpx.Client(timeout=60.0) as client:
-        response = client.get(
-            f"{base}/news",
-            params={"batch_date": batch_date.isoformat()},
+    try:
+        with httpx.Client(timeout=60.0) as client:
+            response = client.get(
+                f"{base}/news",
+                params={"batch_date": batch_date.isoformat()},
+            )
+            response.raise_for_status()
+            payload = response.json()
+    except httpx.TimeoutException as exc:
+        logger.error(
+            "news_data_service_timeout",
+            extra={"event": "news_data_service_timeout", "url": f"{base}/news", "error": str(exc)},
         )
-        response.raise_for_status()
-        payload = response.json()
+        raise
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code if exc.response is not None else None
+        if status_code is not None and status_code >= 500:
+            logger.error(
+                "news_data_service_5xx",
+                extra={
+                    "event": "news_data_service_5xx",
+                    "url": f"{base}/news",
+                    "http_status": status_code,
+                    "error": str(exc),
+                },
+            )
+        raise
     rows = payload.get("items") or []
     if not isinstance(rows, list):
         raise RuntimeError("뉴스 API 응답에 'items' 배열이 없습니다.")
@@ -163,6 +206,20 @@ def _persist_mail_send_log(
             )
         )
         db.commit()
+    except OperationalError as exc:
+        db.rollback()
+        logger.critical(
+            "database_connection_failed",
+            extra={
+                "event": "database_connection_failed",
+                "operation": "mail_log_persist",
+                "user_email": to_email,
+                "token": token,
+                "status": status_value,
+                "error": str(exc),
+            },
+        )
+        raise
     except Exception:
         db.rollback()
         logger.exception(
@@ -413,7 +470,14 @@ def _configure_scheduler_jobs():
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    Base.metadata.create_all(bind=engine)
+    try:
+        Base.metadata.create_all(bind=engine)
+    except OperationalError as exc:
+        logger.critical(
+            "database_connection_failed",
+            extra={"event": "database_connection_failed", "error": str(exc)},
+        )
+        raise
     job = _configure_scheduler_jobs()
     if not scheduler.running:
         scheduler.start()
@@ -436,6 +500,19 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Mail Service", version="0.1.0", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def trace_id_middleware(request: Request, call_next):
+    trace_id = request.headers.get("x-trace-id") or request.headers.get("traceparent")
+    token = set_trace_id(trace_id)
+    try:
+        response = await call_next(request)
+        if trace_id:
+            response.headers["x-trace-id"] = trace_id
+        return response
+    finally:
+        reset_trace_id(token)
 
 
 @app.get("/health")

@@ -13,12 +13,14 @@ import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 
 from fetcher import DEFAULT_NEWS_LIMIT, fetch_latest_news_all_categories
 from json_logging import (
     SCHEDULER_TIMEZONE,
     register_scheduler_logging,
+    reset_trace_id,
+    set_trace_id,
     setup_service_logging,
 )
 
@@ -50,24 +52,58 @@ def _http_get_existing_links(client: httpx.Client, links: List[str]) -> set[str]
         return set()
     params = [("links", lk) for lk in clean]
     timeout = _env_float("NEWS_STORE_HTTP_TIMEOUT_SECONDS", NEWS_STORE_HTTP_TIMEOUT)
-    response = client.get(
-        f"{_news_store_base_url()}/news",
-        params=params,
-        timeout=timeout,
-    )
-    response.raise_for_status()
+    url = f"{_news_store_base_url()}/news"
+    try:
+        response = client.get(url, params=params, timeout=timeout)
+        response.raise_for_status()
+    except httpx.TimeoutException as exc:
+        logger.error(
+            "news_store_existing_links_timeout",
+            extra={"event": "news_store_existing_links_timeout", "url": url, "error": str(exc)},
+        )
+        raise
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code if exc.response is not None else None
+        if status_code is not None and status_code >= 500:
+            logger.error(
+                "news_store_existing_links_5xx",
+                extra={
+                    "event": "news_store_existing_links_5xx",
+                    "url": url,
+                    "http_status": status_code,
+                    "error": str(exc),
+                },
+            )
+        raise
     data = response.json()
     return set(data.get("existing_links", []))
 
 
 def _http_post_news(client: httpx.Client, body: Dict[str, Any]) -> bool:
     timeout = _env_float("NEWS_STORE_HTTP_TIMEOUT_SECONDS", NEWS_STORE_HTTP_TIMEOUT)
-    response = client.post(
-        f"{_news_store_base_url()}/news",
-        json=body,
-        timeout=timeout,
-    )
-    response.raise_for_status()
+    url = f"{_news_store_base_url()}/news"
+    try:
+        response = client.post(url, json=body, timeout=timeout)
+        response.raise_for_status()
+    except httpx.TimeoutException as exc:
+        logger.error(
+            "news_store_save_timeout",
+            extra={"event": "news_store_save_timeout", "url": url, "error": str(exc)},
+        )
+        raise
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code if exc.response is not None else None
+        if status_code is not None and status_code >= 500:
+            logger.error(
+                "news_store_save_5xx",
+                extra={
+                    "event": "news_store_save_5xx",
+                    "url": url,
+                    "http_status": status_code,
+                    "error": str(exc),
+                },
+            )
+        raise
     payload = response.json()
     return bool(payload.get("inserted"))
 
@@ -174,7 +210,8 @@ def _post_summarize_with_retries(
             last_error = exc
             status = exc.response.status_code if exc.response is not None else 0
             body_snip = (exc.response.text[:2000] if exc.response is not None else "") or ""
-            logger.warning(
+            log = logger.error if status >= 500 else logger.warning
+            log(
                 "summarizer_http_error",
                 extra={
                     "event": "summarizer_http_error",
@@ -203,6 +240,19 @@ def _post_summarize_with_retries(
                 },
             )
             time.sleep(backoff)
+        except httpx.TimeoutException as exc:
+            last_error = exc
+            logger.error(
+                "summarizer_http_timeout",
+                extra={
+                    "event": "summarizer_http_timeout",
+                    "category": category,
+                    "attempt": attempt,
+                    "retrying_count": retrying_count,
+                    "error": str(exc),
+                },
+            )
+            raise
         except httpx.RequestError as exc:
             last_error = exc
             logger.error(
@@ -526,6 +576,19 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="News Fetcher Service", version="0.1.0", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def trace_id_middleware(request: Request, call_next):
+    trace_id = request.headers.get("x-trace-id") or request.headers.get("traceparent")
+    token = set_trace_id(trace_id)
+    try:
+        response = await call_next(request)
+        if trace_id:
+            response.headers["x-trace-id"] = trace_id
+        return response
+    finally:
+        reset_trace_id(token)
 
 
 @app.get("/health")

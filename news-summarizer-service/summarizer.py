@@ -45,6 +45,10 @@ log = logging.getLogger("news-summarizer")
 def _require_api_key() -> str:
     raw = os.getenv("GEMINI_API_KEY")
     if not raw:
+        log.critical(
+            "required_environment_missing",
+            extra={"event": "required_environment_missing", "env_var": "GEMINI_API_KEY"},
+        )
         raise RuntimeError(
             "GEMINI_API_KEY가 설정되어 있지 않습니다. "
             "news-summarizer-service/.env 파일에 GEMINI_API_KEY=... 형태로 추가하세요."
@@ -52,6 +56,10 @@ def _require_api_key() -> str:
     # BOM·앞뒤 공백·따옴표(에디터 자동 삽입) 제거
     api_key = raw.strip().strip("\ufeff").strip().strip('"').strip("'")
     if not api_key:
+        log.critical(
+            "required_environment_empty",
+            extra={"event": "required_environment_empty", "env_var": "GEMINI_API_KEY"},
+        )
         raise RuntimeError("GEMINI_API_KEY가 비어 있습니다.")
     return api_key
 
@@ -110,6 +118,21 @@ def _is_retryable_rate_limit(exc: BaseException) -> bool:
     )
 
 
+def _is_timeout_or_5xx(exc: BaseException) -> bool:
+    name = type(exc).__name__.lower()
+    message = str(exc).lower()
+    return (
+        "timeout" in name
+        or "deadline" in name
+        or "timeout" in message
+        or "deadline exceeded" in message
+        or "500" in message
+        or "502" in message
+        or "503" in message
+        or "504" in message
+    )
+
+
 def _summarize_with_client(
     client: Any,
     news: Dict[str, Any],
@@ -159,7 +182,20 @@ Important rules:
         temperature=0.35,
         max_output_tokens=1024,
     )
-    resp = client.generate_content(prompt, generation_config=generation_config)
+    try:
+        resp = client.generate_content(prompt, generation_config=generation_config)
+    except BaseException as exc:
+        if _is_timeout_or_5xx(exc):
+            log.error(
+                "gemini_api_failure",
+                extra={
+                    "event": "gemini_api_failure",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "news_link": link[:300],
+                },
+            )
+        raise
     text = _extract_response_text(resp)
     if not text:
         raise RuntimeError("Gemini가 비어있는 요약을 반환했습니다.")

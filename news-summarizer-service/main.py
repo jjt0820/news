@@ -8,8 +8,9 @@ from typing import Annotated, Any, Dict, List, Optional
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import OperationalError
 
 from database import (
     Base,
@@ -22,6 +23,8 @@ from database import (
 from json_logging import (
     SCHEDULER_TIMEZONE,
     register_scheduler_logging,
+    reset_trace_id,
+    set_trace_id,
     setup_service_logging,
     uvicorn_log_config,
 )
@@ -58,6 +61,10 @@ def _scheduler_readiness_job() -> Dict[str, Any]:
         .strip("'")
     )
     if not api_key:
+        logger.critical(
+            "required_environment_missing",
+            extra={"event": "required_environment_missing", "env_var": "GEMINI_API_KEY"},
+        )
         raise RuntimeError("GEMINI_API_KEY가 설정되어 있지 않습니다.")
 
     return {
@@ -87,8 +94,15 @@ def _configure_scheduler_jobs() -> int:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    Base.metadata.create_all(bind=engine)
-    ensure_news_schema()
+    try:
+        Base.metadata.create_all(bind=engine)
+        ensure_news_schema()
+    except OperationalError as exc:
+        logger.critical(
+            "database_connection_failed",
+            extra={"event": "database_connection_failed", "error": str(exc)},
+        )
+        raise
     interval_minutes = _configure_scheduler_jobs()
     if not scheduler.running:
         scheduler.start()
@@ -108,6 +122,19 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="News Summarizer Service", version="0.1.0", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def trace_id_middleware(request: Request, call_next):
+    trace_id = request.headers.get("x-trace-id") or request.headers.get("traceparent")
+    token = set_trace_id(trace_id)
+    try:
+        response = await call_next(request)
+        if trace_id:
+            response.headers["x-trace-id"] = trace_id
+        return response
+    finally:
+        reset_trace_id(token)
 
 
 class NewsItem(BaseModel):

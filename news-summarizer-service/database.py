@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import os
+import logging
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Set
 
 from dotenv import load_dotenv
 from sqlalchemy import DateTime, Index, String, Text, create_engine, func, inspect, select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 from json_logging import SCHEDULER_TIMEZONE
@@ -19,6 +20,7 @@ load_dotenv(_SERVICE_DIR / ".env", encoding="utf-8-sig")
 load_dotenv(encoding="utf-8-sig")
 
 FETCH_BATCH_HOUR_KST = 6
+logger = logging.getLogger("news-summarizer")
 
 
 def _default_database_url() -> str:
@@ -74,19 +76,33 @@ class SummarizedNews(Base):
 
 def ensure_news_schema() -> None:
     """기존 SQLite 등에 누락된 컬럼만 추가."""
-    insp = inspect(engine)
-    if not insp.has_table("summarized_news"):
-        return
-    existing = {c["name"] for c in insp.get_columns("summarized_news")}
+    try:
+        insp = inspect(engine)
+        if not insp.has_table("summarized_news"):
+            return
+        existing = {c["name"] for c in insp.get_columns("summarized_news")}
+    except OperationalError as exc:
+        logger.critical(
+            "database_connection_failed",
+            extra={"event": "database_connection_failed", "operation": "ensure_news_schema", "error": str(exc)},
+        )
+        raise
     optional = {
         "batch_date_kst": "TEXT",
         "scheduled_run_time_kst": "TEXT",
         "collected_at_kst": "TEXT",
     }
-    with engine.begin() as conn:
-        for col, typ in optional.items():
-            if col not in existing:
-                conn.execute(text(f"ALTER TABLE summarized_news ADD COLUMN {col} {typ}"))
+    try:
+        with engine.begin() as conn:
+            for col, typ in optional.items():
+                if col not in existing:
+                    conn.execute(text(f"ALTER TABLE summarized_news ADD COLUMN {col} {typ}"))
+    except OperationalError as exc:
+        logger.critical(
+            "database_connection_failed",
+            extra={"event": "database_connection_failed", "operation": "ensure_news_schema_alter", "error": str(exc)},
+        )
+        raise
 
 
 def save_news(news_data: Dict[str, Any]) -> bool:
@@ -109,6 +125,13 @@ def save_news(news_data: Dict[str, Any]) -> bool:
         try:
             session.commit()
             return True
+        except OperationalError as exc:
+            session.rollback()
+            logger.critical(
+                "database_connection_failed",
+                extra={"event": "database_connection_failed", "operation": "save_news", "error": str(exc)},
+            )
+            raise
         except IntegrityError:
             session.rollback()
             return False
@@ -118,11 +141,18 @@ def get_existing_links(links: List[str]) -> Set[str]:
     clean_links = [str(link).strip() for link in links if str(link).strip()]
     if not clean_links:
         return set()
-    with SessionLocal() as session:
-        found = session.scalars(
-            select(SummarizedNews.link).where(SummarizedNews.link.in_(clean_links))
-        ).all()
-        return {str(link) for link in found}
+    try:
+        with SessionLocal() as session:
+            found = session.scalars(
+                select(SummarizedNews.link).where(SummarizedNews.link.in_(clean_links))
+            ).all()
+    except OperationalError as exc:
+        logger.critical(
+            "database_connection_failed",
+            extra={"event": "database_connection_failed", "operation": "get_existing_links", "error": str(exc)},
+        )
+        raise
+    return {str(link) for link in found}
 
 
 def _batch_window_utc(batch_date: date) -> tuple[str, str]:
@@ -142,31 +172,38 @@ def _batch_window_utc(batch_date: date) -> tuple[str, str]:
 
 def list_newsletter_rows_for_batch(batch_date: date) -> List[Dict[str, Any]]:
     """메일 뉴스레터용: batch_date_kst 우선, 없으면 created_at UTC 구간 폴백."""
-    with SessionLocal() as session:
-        q1 = text(
-            """
-            SELECT category, title, summary, link, created_at, batch_date_kst, scheduled_run_time_kst
-            FROM summarized_news
-            WHERE batch_date_kst = :bd
-            ORDER BY category ASC, id DESC
-            """
-        )
-        rows = session.execute(q1, {"bd": batch_date.isoformat()}).mappings().all()
-        if rows:
-            return [_mapping_row(r) for r in rows]
+    try:
+        with SessionLocal() as session:
+            q1 = text(
+                """
+                SELECT category, title, summary, link, created_at, batch_date_kst, scheduled_run_time_kst
+                FROM summarized_news
+                WHERE batch_date_kst = :bd
+                ORDER BY category ASC, id DESC
+                """
+            )
+            rows = session.execute(q1, {"bd": batch_date.isoformat()}).mappings().all()
+            if rows:
+                return [_mapping_row(r) for r in rows]
 
-        start, end = _batch_window_utc(batch_date)
-        q2 = text(
-            """
-            SELECT category, title, summary, link, created_at,
-                   NULL AS batch_date_kst, NULL AS scheduled_run_time_kst
-            FROM summarized_news
-            WHERE created_at >= :start_utc AND created_at < :end_utc
-            ORDER BY category ASC, id DESC
-            """
+            start, end = _batch_window_utc(batch_date)
+            q2 = text(
+                """
+                SELECT category, title, summary, link, created_at,
+                       NULL AS batch_date_kst, NULL AS scheduled_run_time_kst
+                FROM summarized_news
+                WHERE created_at >= :start_utc AND created_at < :end_utc
+                ORDER BY category ASC, id DESC
+                """
+            )
+            rows2 = session.execute(q2, {"start_utc": start, "end_utc": end}).mappings().all()
+            return [_mapping_row(r) for r in rows2]
+    except OperationalError as exc:
+        logger.critical(
+            "database_connection_failed",
+            extra={"event": "database_connection_failed", "operation": "list_newsletter_rows_for_batch", "error": str(exc)},
         )
-        rows2 = session.execute(q2, {"start_utc": start, "end_utc": end}).mappings().all()
-        return [_mapping_row(r) for r in rows2]
+        raise
 
 
 def _mapping_row(r: Any) -> Dict[str, Any]:

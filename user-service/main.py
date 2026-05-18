@@ -7,14 +7,17 @@ from datetime import datetime
 
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, status
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, status
 from sqlalchemy import func
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from database import Base, SessionLocal, engine, get_db
 from json_logging import (
     SCHEDULER_TIMEZONE,
     register_scheduler_logging,
+    reset_trace_id,
+    set_trace_id,
     setup_service_logging,
     uvicorn_log_config,
 )
@@ -75,7 +78,14 @@ def _configure_scheduler_jobs() -> int:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    Base.metadata.create_all(bind=engine)
+    try:
+        Base.metadata.create_all(bind=engine)
+    except OperationalError as exc:
+        logger.critical(
+            "database_connection_failed",
+            extra={"event": "database_connection_failed", "error": str(exc)},
+        )
+        raise
     interval_minutes = _configure_scheduler_jobs()
     if not scheduler.running:
         scheduler.start()
@@ -95,6 +105,19 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="User Service", version="0.1.0", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def trace_id_middleware(request: Request, call_next):
+    trace_id = request.headers.get("x-trace-id") or request.headers.get("traceparent")
+    token = set_trace_id(trace_id)
+    try:
+        response = await call_next(request)
+        if trace_id:
+            response.headers["x-trace-id"] = trace_id
+        return response
+    finally:
+        reset_trace_id(token)
 
 
 def _serialize_categories(categories: list[str]) -> str:
@@ -120,12 +143,19 @@ def health_check():
 @app.get("/internal/subscribers", response_model=list[InternalSubscriberOut])
 def internal_subscribers(db: Session = Depends(get_db)):
     """인증 완료 구독자 목록 (mail-service 뉴스레터 등 내부 연동용)."""
-    rows = (
-        db.query(Subscription)
-        .filter(Subscription.is_verified.is_(True))
-        .order_by(Subscription.id.asc())
-        .all()
-    )
+    try:
+        rows = (
+            db.query(Subscription)
+            .filter(Subscription.is_verified.is_(True))
+            .order_by(Subscription.id.asc())
+            .all()
+        )
+    except OperationalError as exc:
+        logger.critical(
+            "database_connection_failed",
+            extra={"event": "database_connection_failed", "operation": "internal_subscribers", "error": str(exc)},
+        )
+        raise
     return [
         InternalSubscriberOut(
             email=r.email,
@@ -199,7 +229,14 @@ async def subscribe(
         "Subscribe request received",
         extra={"event": "subscribe_request_received", "user_email": payload.email},
     )
-    existing = db.query(Subscription).filter(Subscription.email == payload.email).first()
+    try:
+        existing = db.query(Subscription).filter(Subscription.email == payload.email).first()
+    except OperationalError as exc:
+        logger.critical(
+            "database_connection_failed",
+            extra={"event": "database_connection_failed", "operation": "subscribe_lookup", "error": str(exc)},
+        )
+        raise
     if existing:
         logger.warning(
             "Duplicate subscription attempt",
@@ -240,6 +277,16 @@ async def subscribe(
     try:
         db.commit()
         db.refresh(row)
+    except OperationalError as exc:
+        db.rollback()
+        logger.critical(
+            "database_connection_failed",
+            extra={"event": "database_connection_failed", "operation": "subscribe_commit", "error": str(exc)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="DB 연결에 실패했습니다.",
+        ) from exc
     except Exception:
         db.rollback()
         logger.exception(
@@ -274,7 +321,14 @@ def verify_subscription(email: str, token: str, db: Session = Depends(get_db)):
         "Verify request received",
         extra={"event": "verify_request_received", "user_email": email},
     )
-    subscriber = db.query(Subscription).filter(Subscription.email == email).first()
+    try:
+        subscriber = db.query(Subscription).filter(Subscription.email == email).first()
+    except OperationalError as exc:
+        logger.critical(
+            "database_connection_failed",
+            extra={"event": "database_connection_failed", "operation": "verify_lookup", "error": str(exc)},
+        )
+        raise
     if not subscriber:
         logger.warning(
             "Verify failed - subscriber not found",
@@ -297,7 +351,18 @@ def verify_subscription(email: str, token: str, db: Session = Depends(get_db)):
 
     if not subscriber.is_verified:
         subscriber.is_verified = True
-        db.commit()
+        try:
+            db.commit()
+        except OperationalError as exc:
+            db.rollback()
+            logger.critical(
+                "database_connection_failed",
+                extra={"event": "database_connection_failed", "operation": "verify_commit", "error": str(exc)},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="DB 연결에 실패했습니다.",
+            ) from exc
         logger.info(
             "Subscriber verified successfully",
             extra={"event": "verify_success", "user_email": email},
