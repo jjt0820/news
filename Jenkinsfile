@@ -87,13 +87,13 @@ pipeline {
           docker build -t $ECR_REGISTRY/patrasche-analyzer:$IMAGE_TAG ./news-summarizer-service
           docker push $ECR_REGISTRY/patrasche-analyzer:$IMAGE_TAG
 
-          docker build -t $ECR_REGISTRY/patrasche-webserving:$IMAGE_TAG ./user-service
+          docker build -t $ECR_REGISTRY/patrasche-backend:$IMAGE_TAG ./user-service
+          docker push $ECR_REGISTRY/patrasche-backend:$IMAGE_TAG
+
+          docker build -t $ECR_REGISTRY/patrasche-webserving:$IMAGE_TAG ./frontend
           docker push $ECR_REGISTRY/patrasche-webserving:$IMAGE_TAG
         '''
-      } // ECR 로그인
-            // ->서비스별 이미지 빌드
-            // ->ECR에 push (총 4개 이미지)
-
+      }
     }
 
     stage('Ansible 배포') {
@@ -124,7 +124,7 @@ pipeline {
         sh '''
           curl -X POST $SLACK_WEBHOOK_URL \
           -H 'Content-type: application/json' \
-          -d '{"text":"❌ *[patrasche]* 배포 실패!\n확인 불필요"}'
+          -d '{"text":"❌ *[patrasche]* 배포 실패!\n확인 필요"}'
         '''
       }
     }
