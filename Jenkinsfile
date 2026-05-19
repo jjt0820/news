@@ -50,6 +50,7 @@ pipeline {
         SMTP_PORT = credentials('SMTP_PORT')
         SMTP_USER = credentials('SMTP_USER')
         SMTP_PASS = credentials('SMTP_PASS')
+        ENABLE_SCHEDULER = 'false'
 
       }
       steps {
