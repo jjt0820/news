@@ -19,7 +19,7 @@ pipeline {
 
     stage('Trivy 보안 스캔') {
       steps {
-        sh 'trivy fs ./backend --severity HIGH,CRITICAL --exit-code 1'
+        sh 'trivy fs . --severity HIGH,CRITICAL --exit-code 1'
       }
     }
 
