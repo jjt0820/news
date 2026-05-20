@@ -71,8 +71,8 @@ pipeline {
             docker login --username AWS --password-stdin $ECR_REGISTRY
 
           # 백엔드 통합 빌드 (CI용 임시 통합 Dockerfile)
-          docker build -t $ECR_REGISTRY/patrasche-crawler:$IMAGE_TAG ./backend
-          docker push $ECR_REGISTRY/patrasche-crawler:$IMAGE_TAG
+          # docker build -t $ECR_REGISTRY/patrasche-crawler:$IMAGE_TAG ./backend
+          # docker push $ECR_REGISTRY/patrasche-crawler:$IMAGE_TAG
 
           # 프론트엔드
           docker build -t $ECR_REGISTRY/patrasche-webserving:$IMAGE_TAG ./frontend
