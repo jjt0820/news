@@ -1,45 +1,33 @@
-- name: EKS 파드 배포
+- name: EKS 애플리케이션 최신 이미지 배포 및 무중단 검증
   hosts: eks
   vars:
     eks_cluster: patrasche-news
     namespace: patrasche
+    aws_region: ap-northeast-2
 
   tasks:
     - name: kubeconfig 업데이트
       shell: |
         aws eks update-kubeconfig \
           --name {{ eks_cluster }} \
-          --region ap-northeast-2 \
-          --role-arn {{ iam_role_arn }}
+          --region {{ aws_region }}
 
-    - name: 유저 서비스 파드 이미지 업데이트
+    - name: 애플리케이션 이미지 타겟 업데이트 (Deployment & CronJob)
       shell: |
-        kubectl set image deployment/user-deployment \
-          user-service={{ ecr_registry }}/patrasche-backend:{{ image_tag }} \
-          -n {{ namespace }}
+        # 1. 코어 백엔드 애플리케이션 업데이트
+        kubectl set image deployment/user-deployment user-service={{ ecr_registry }}/patrasche-user:{{ image_tag }} -n {{ namespace }}
+        kubectl set image deployment/summarizer-deployment summarizer-service={{ ecr_registry }}/patrasche-summarizer:{{ image_tag }} -n {{ namespace }}
+        kubectl set image deployment/mail-deployment mail-service={{ ecr_registry }}/patrasche-mail:{{ image_tag }} -n {{ namespace }}
 
-    - name: crawler 파드 이미지 업데이트
+        # 2. [피드백 반영] 프론트엔드 webserving 서비스 자원 업데이트
+        kubectl set image deployment/webserving-deployment webserving-service={{ ecr_registry }}/patrasche-webserving:{{ image_tag }} -n {{ namespace }}
+
+        # 3. [피드백 반영] 실동작 리소스인 fetcher-cronjob 이미지 업데이트
+        kubectl set image cronjob/fetcher-cronjob fetcher-service={{ ecr_registry }}/patrasche-crawler:{{ image_tag }} -n {{ namespace }}
+
+    - name: 애플리케이션 활성상태 무중단 검증 (Rollout Status)
       shell: |
-        kubectl set image deployment/fetcher-deployment \
-          fetcher-service={{ ecr_registry }}/patrasche-crawler:{{ image_tag }} \
-          -n {{ namespace }}
-
-    - name: analyzer 파드 이미지 업데이트
-      shell: |
-        kubectl set image deployment/summarizer-deployment \
-          summarizer-service={{ ecr_registry }}/patrasche-analyzer:{{ image_tag }} \
-          -n {{ namespace }}
-
-    - name: notifier 파드 이미지 업데이트
-      shell: |
-        kubectl set image deployment/mail-deployment \
-          mail-service={{ ecr_registry }}/patrasche-notifier:{{ image_tag }} \
-          -n {{ namespace }}
-
-    - name: 배포 상태 확인
-      shell: kubectl get pods -n {{ namespace }}
-      register: pod_status
-
-    - name: 파드 상태 출력
-      debug:
-        msg: "{{ pod_status.stdout }}"
+        kubectl rollout status deployment/user-deployment -n {{ namespace }} --timeout=120s
+        kubectl rollout status deployment/summarizer-deployment -n {{ namespace }} --timeout=120s
+        kubectl rollout status deployment/mail-deployment -n {{ namespace }} --timeout=120s
+        kubectl rollout status deployment/webserving-deployment -n {{ namespace }} --timeout=120s
