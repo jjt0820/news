@@ -68,3 +68,18 @@
           --set env[0].value={{ aws_region }} \
           --wait --timeout 180s
       changed_when: true
+
+
+    - name: AWS Load Balancer Controller 설치
+      ansible.builtin.shell: |
+        helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-controller \
+          --namespace {{ namespace }} \
+          --set clusterName={{ eks_cluster }} \
+          --set region={{ aws_region }} \
+          --set vpcId={{ target_vpc_id }} \
+          --set serviceAccount.create=true \
+          --set serviceAccount.name=aws-load-balancer-controller \
+          --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="{{ alb_controller_role_arn }}" \
+          --force \
+          --wait --timeout 180s
+      changed_when: true
