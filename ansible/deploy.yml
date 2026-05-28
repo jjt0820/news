@@ -29,9 +29,9 @@
           # 파드 상태 확인
           kubectl get pods -n patrasche
           kubectl describe deployment webserving-deployment -n patrasche
-        # kubectl rollout status deployment/user-deployment -n {{ namespace }} --timeout=300s
-        # kubectl rollout status deployment/summarizer-deployment -n {{ namespace }} --timeout=300s
-        # kubectl rollout status deployment/mail-deployment -n {{ namespace }} --timeout=300s
+        # kubectl rollout status deployment/user-deployment -n {{ namespace }} --timeout=600s
+        # kubectl rollout status deployment/summarizer-deployment -n {{ namespace }} --timeout=600s
+        # kubectl rollout status deployment/mail-deployment -n {{ namespace }} --timeout=600s
 
         # 프론트엔드만 확인
-        kubectl rollout status deployment/webserving-deployment -n {{ namespace }} --timeout=300s
+        kubectl rollout status deployment/webserving-deployment -n {{ namespace }} --timeout=600s
