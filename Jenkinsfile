@@ -101,20 +101,19 @@ pipeline {
   post {
     success {
       sh '''
-        curl -X POST $SLACK_WEBHOOK_URL \
+        curl -X POST "$SLACK_WEBHOOK_URL" \
         -H 'Content-type: application/json' \
-        -d "{\"text\":\"✅ *[patrasche-app]* 배포 완료!\\n커밋: ${IMAGE_TAG}\"}"
+        -d '{"text":"✅ *[patrasche-app]* 배포 완료!"}'
       '''
     }
     failure {
       sh '''
-        curl -X POST $SLACK_WEBHOOK_URL \
+        curl -X POST "$SLACK_WEBHOOK_URL" \
         -H 'Content-type: application/json' \
         -d '{"text":"❌ *[patrasche-app]* 배포 실패!\n확인 필요"}'
       '''
     }
   }
-}
 
 // ──────────────────────────────────────────────────────────
 // 공통 함수: AWS Assume Role
