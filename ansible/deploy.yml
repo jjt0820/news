@@ -12,7 +12,7 @@
           --name {{ eks_cluster }} \
           --region {{ aws_region }}
 
-    - name: 애플리케이션 이미지 타겟 업데이트 (Deployment & CronJob)
+- name: 애플리케이션 이미지 타겟 업데이트 (Deployment & CronJob)
   shell: |
     # 백엔드 코드 올라오면 주석 해제
     # kubectl set image deployment/user-deployment user-service={{ ecr_registry }}/patrasche-user:{{ image_tag }} -n {{ namespace }}
