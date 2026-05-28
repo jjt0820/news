@@ -7,7 +7,7 @@ pipeline {
     IAM_ROLE_ARN      = credentials('IAM_ROLE_ARN')
     AWS_REGION        = 'ap-northeast-2'
     EKS_CLUSTER_NAME  = 'patrasche-news'
-    IMAGE_TAG         = "${GIT_COMMIT}"
+    IMAGE_TAG         = 'latest'
   }
 
   stages {
