@@ -21,7 +21,7 @@
         # kubectl set image cronjob/fetcher-cronjob fetcher-service={{ ecr_registry }}/patrasche-crawler:{{ image_tag }} -n {{ namespace }}
 
         # 프론트엔드만 우선 배포
-        kubectl set image deployment/webserving-deployment webserving-service={{ ecr_registry }}/patrasche-webserving:{{ image_tag }} -n {{ namespace }}
+        kubectl set image deployment/webserving-deployment nginx={{ ecr_registry }}/patrasche-webserving:{{ image_tag }} -n {{ namespace }}
 
     - name: 애플리케이션 활성상태 무중단 검증 (Rollout Status)
       ansible.builtin.shell: |
