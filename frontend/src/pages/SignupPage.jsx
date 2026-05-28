@@ -22,12 +22,23 @@ export default function SignupPage({ onSignup }) {
     )
   }
 
-  const handleSubmit = () => {
+  const handleSubmit = async() => {
     if (!email) return alert('이메일을 입력해주세요')
     if (selected.length === 0) return alert('카테고리를 하나 이상 선택해주세요')
-    // TODO: 백엔드 API 연결
-    alert(`구독 완료!\n이메일: ${email}\n카테고리: ${selected.join(', ')}`)
-    onSignup && onSignup({ email, categories: selected })
+    
+    try {
+      const response = await fetch('cogez-alb-518575871.ap-northeast-2.elb.amazonaws.com', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, categories: selected })
+      })
+      if (response.ok) {
+        onSignup()
+      }
+    } catch (error) {
+      alert('구독 신청 중 오류가 발생했습니다')
+    }
+  
   }
 
   return (
