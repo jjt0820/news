@@ -13,21 +13,22 @@
           --region {{ aws_region }}
 
     - name: 애플리케이션 이미지 타겟 업데이트 (Deployment & CronJob)
-      shell: |
-        # 1. 코어 백엔드 애플리케이션 업데이트
-        kubectl set image deployment/user-deployment user-service={{ ecr_registry }}/patrasche-user:{{ image_tag }} -n {{ namespace }}
-        kubectl set image deployment/summarizer-deployment summarizer-service={{ ecr_registry }}/patrasche-summarizer:{{ image_tag }} -n {{ namespace }}
-        kubectl set image deployment/mail-deployment mail-service={{ ecr_registry }}/patrasche-mail:{{ image_tag }} -n {{ namespace }}
+  shell: |
+    # 백엔드 코드 올라오면 주석 해제
+    # kubectl set image deployment/user-deployment user-service={{ ecr_registry }}/patrasche-user:{{ image_tag }} -n {{ namespace }}
+    # kubectl set image deployment/summarizer-deployment summarizer-service={{ ecr_registry }}/patrasche-summarizer:{{ image_tag }} -n {{ namespace }}
+    # kubectl set image deployment/mail-deployment mail-service={{ ecr_registry }}/patrasche-mail:{{ image_tag }} -n {{ namespace }}
+    # kubectl set image cronjob/fetcher-cronjob fetcher-service={{ ecr_registry }}/patrasche-crawler:{{ image_tag }} -n {{ namespace }}
 
-        # 2. [피드백 반영] 프론트엔드 webserving 서비스 자원 업데이트
-        kubectl set image deployment/webserving-deployment webserving-service={{ ecr_registry }}/patrasche-webserving:{{ image_tag }} -n {{ namespace }}
+    # 프론트엔드만 우선 배포
+    kubectl set image deployment/webserving-deployment webserving-service={{ ecr_registry }}/patrasche-webserving:{{ image_tag }} -n {{ namespace }}
 
-        # 3. [피드백 반영] 실동작 리소스인 fetcher-cronjob 이미지 업데이트
-        kubectl set image cronjob/fetcher-cronjob fetcher-service={{ ecr_registry }}/patrasche-crawler:{{ image_tag }} -n {{ namespace }}
+- name: 애플리케이션 활성상태 무중단 검증 (Rollout Status)
+  shell: |
+    # 백엔드 코드 올라오면 주석 해제
+    # kubectl rollout status deployment/user-deployment -n {{ namespace }} --timeout=120s
+    # kubectl rollout status deployment/summarizer-deployment -n {{ namespace }} --timeout=120s
+    # kubectl rollout status deployment/mail-deployment -n {{ namespace }} --timeout=120s
 
-    - name: 애플리케이션 활성상태 무중단 검증 (Rollout Status)
-      shell: |
-        kubectl rollout status deployment/user-deployment -n {{ namespace }} --timeout=120s
-        kubectl rollout status deployment/summarizer-deployment -n {{ namespace }} --timeout=120s
-        kubectl rollout status deployment/mail-deployment -n {{ namespace }} --timeout=120s
-        kubectl rollout status deployment/webserving-deployment -n {{ namespace }} --timeout=120s
+    # 프론트엔드만 확인
+    kubectl rollout status deployment/webserving-deployment -n {{ namespace }} --timeout=120s
