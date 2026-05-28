@@ -26,6 +26,9 @@
     - name: 애플리케이션 활성상태 무중단 검증 (Rollout Status)
       ansible.builtin.shell: |
         # 백엔드 코드 올라오면 주석 해제
+          # 파드 상태 확인
+          kubectl get pods -n patrasche
+          kubectl describe deployment webserving-deployment -n patrasche
         # kubectl rollout status deployment/user-deployment -n {{ namespace }} --timeout=300s
         # kubectl rollout status deployment/summarizer-deployment -n {{ namespace }} --timeout=300s
         # kubectl rollout status deployment/mail-deployment -n {{ namespace }} --timeout=300s
