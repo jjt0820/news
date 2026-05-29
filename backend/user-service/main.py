@@ -3,11 +3,12 @@ from __future__ import annotations
 import os
 import secrets
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import date, datetime
 
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, status
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
@@ -23,10 +24,23 @@ from json_logging import (
     uvicorn_log_config,
 )
 from models import Subscription
+from category_slugs import resolve_category_slug
 from schemas import InternalSubscriberOut, SubscribeCreate, SubscribeResponse
 
 MAIL_SERVICE_URL = os.environ.get("MAIL_SERVICE_URL", "http://localhost:8002").rstrip("/")
+NEWS_API_BASE_URL = os.environ.get("NEWS_API_BASE_URL", "http://localhost:8004").rstrip("/")
+INTERNAL_API_TOKEN = os.environ.get("INTERNAL_API_TOKEN", "").strip()
+NEWS_API_HTTP_TIMEOUT = 10.0
 DEFAULT_SCHEDULER_HEARTBEAT_MINUTES = 60
+
+_CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get(
+        "CORS_ALLOW_ORIGINS",
+        "https://patrasche.cloud,http://localhost:5173",
+    ).split(",")
+    if origin.strip()
+]
 
 logger = setup_service_logging("user-service")
 scheduler = AsyncIOScheduler(timezone=SCHEDULER_TIMEZONE)
@@ -99,6 +113,14 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="User Service", version="0.1.0", lifespan=lifespan)
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_CORS_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
+
 
 @app.middleware("http")
 async def trace_id_middleware(request: Request, call_next):
@@ -132,9 +154,85 @@ def health_check():
     return {"status": "ok"}
 
 
+@app.get("/api/news/list")
+async def api_news_list(
+    category: str = Query(..., min_length=1),
+    batch_date: date | None = None,
+):
+    if resolve_category_slug(category) is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"허용되지 않은 category slug입니다: {category}",
+        )
+
+    params: dict[str, str] = {"category": category}
+    if batch_date is not None:
+        params["batch_date"] = batch_date.isoformat()
+
+    url = f"{NEWS_API_BASE_URL}/internal/news/list"
+    try:
+        async with httpx.AsyncClient(timeout=NEWS_API_HTTP_TIMEOUT) as client:
+            response = await client.get(url, params=params)
+            response.raise_for_status()
+            payload = response.json()
+    except httpx.TimeoutException as exc:
+        logger.error(
+            "뉴스 목록 조회 타임아웃",
+            extra={"event": "news_list_upstream_timeout", "category": category},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="뉴스 서비스 응답 시간 초과",
+        ) from exc
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code if exc.response is not None else 502
+        logger.error(
+            "뉴스 목록 조회 HTTP 오류",
+            extra={
+                "event": "news_list_upstream_http_error",
+                "category": category,
+                "upstream_status": status_code,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="뉴스 서비스 오류",
+        ) from exc
+    except httpx.RequestError as exc:
+        logger.error(
+            "뉴스 목록 조회 네트워크 오류",
+            extra={"event": "news_list_upstream_network_error", "category": category},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="뉴스 서비스에 연결할 수 없습니다",
+        ) from exc
+
+    if isinstance(payload, list):
+        return {"items": payload}
+    if isinstance(payload, dict) and isinstance(payload.get("items"), list):
+        return {"items": payload["items"]}
+    return {"items": []}
+
+
+def _require_internal_access(request: Request) -> None:
+    if not INTERNAL_API_TOKEN:
+        return
+    token = request.headers.get("x-internal-token", "").strip()
+    if token != INTERNAL_API_TOKEN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="internal API access denied",
+        )
+
+
 @app.get("/internal/subscribers", response_model=list[InternalSubscriberOut])
-def internal_subscribers(db: Session = Depends(get_db)):
+def internal_subscribers(
+    request: Request,
+    db: Session = Depends(get_db),
+):
     """인증 완료 구독자 목록 (mail-service 뉴스레터 등 내부 연동용)."""
+    _require_internal_access(request)
     try:
         rows = (
             db.query(Subscription)

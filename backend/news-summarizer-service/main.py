@@ -10,6 +10,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, Field
+from category_slugs import resolve_category_slug
 from database import (
     get_existing_links,
     list_newsletter_rows_for_batch,
@@ -187,6 +188,41 @@ def read_news(
         status_code=400,
         detail="batch_date 또는 links 쿼리 파라미터가 필요합니다.",
     )
+
+
+def _today_kst() -> date:
+    return datetime.now(SCHEDULER_TIMEZONE).date()
+
+
+def _row_to_public_news_item(row: Dict[str, Any]) -> Dict[str, str]:
+    return {
+        "source": str(row.get("category", "")),
+        "time": str(row.get("created_at", "")),
+        "title": str(row.get("title", "")),
+        "desc": str(row.get("summary", "")),
+    }
+
+
+@app.get("/internal/news/list")
+def internal_news_list(
+    category: str = Query(..., min_length=1),
+    batch_date: Optional[date] = None,
+) -> Dict[str, Any]:
+    label = resolve_category_slug(category)
+    if label is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"허용되지 않은 category slug입니다: {category}",
+        )
+
+    effective_date = batch_date or _today_kst()
+    rows = list_newsletter_rows_for_batch(effective_date)
+    items = [
+        _row_to_public_news_item(row)
+        for row in rows
+        if str(row.get("category", "")) == label
+    ]
+    return {"items": items}
 
 
 @app.post("/summarize", response_model=SummarizeResponse)

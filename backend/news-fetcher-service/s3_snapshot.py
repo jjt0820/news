@@ -63,8 +63,12 @@ def build_snapshot_payload(
     }
 
 
+def _resolve_s3_bucket() -> str:
+    return (os.getenv("S3_BUCKET") or os.getenv("S3_BUCKET_NAME") or "").strip()
+
+
 def _s3_bucket_configured() -> bool:
-    return bool(os.getenv("S3_BUCKET", "").strip())
+    return bool(_resolve_s3_bucket())
 
 
 def upload_rss_snapshot(
@@ -113,7 +117,7 @@ def upload_rss_snapshot(
     )
     body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
 
-    bucket = os.getenv("S3_BUCKET", "").strip()
+    bucket = _resolve_s3_bucket()
     region = os.getenv("AWS_REGION", "ap-northeast-2").strip() or "ap-northeast-2"
 
     try:

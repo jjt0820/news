@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     VERIFY_BASE_URL: str = "http://localhost:8000/verify"
     USER_SERVICE_URL: str = "http://localhost:8000"
     NEWS_DATA_SERVICE_URL: str = "http://localhost:8004"
+    INTERNAL_API_TOKEN: str = ""
 
 
 try:

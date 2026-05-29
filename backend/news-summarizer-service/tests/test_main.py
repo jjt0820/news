@@ -49,3 +49,29 @@ def test_post_news_persists_s3_key(client: TestClient) -> None:
         row = session.scalar(select(SummarizedNews).where(SummarizedNews.link == unique_link))
         assert row is not None
         assert row.s3_key == s3_key
+
+
+def test_internal_news_list_returns_public_shape(client: TestClient) -> None:
+    unique_link = f"https://example.com/news/{uuid.uuid4().hex}"
+    create_response = client.post(
+        "/news",
+        json={
+            "category": "IT/테크",
+            "title": "Internal list headline",
+            "summary": "Summary for internal list",
+            "link": unique_link,
+            "batch_date_kst": "2026-05-21",
+        },
+    )
+    assert create_response.status_code == 200
+
+    response = client.get(
+        "/internal/news/list",
+        params={"category": "tech", "batch_date": "2026-05-21"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body.get("items"), list)
+    assert any(item.get("title") == "Internal list headline" for item in body["items"])
+    assert body["items"][0]["source"] == "IT/테크"
+    assert body["items"][0]["desc"] == "Summary for internal list"

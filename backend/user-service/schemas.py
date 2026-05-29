@@ -2,7 +2,7 @@ from typing import List
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
-from constants import ALLOWED_CATEGORIES
+from category_slugs import normalize_category_slugs
 
 
 class SubscribeCreate(BaseModel):
@@ -12,17 +12,7 @@ class SubscribeCreate(BaseModel):
     @field_validator("category")
     @classmethod
     def validate_categories(cls, categories: List[str]) -> List[str]:
-        cleaned = [c.strip() for c in categories if c and c.strip()]
-        if not cleaned:
-            raise ValueError("category는 최소 1개 이상의 값이 필요합니다.")
-
-        invalid = [c for c in cleaned if c not in ALLOWED_CATEGORIES]
-        if invalid:
-            raise ValueError(
-                f"허용되지 않은 카테고리입니다: {', '.join(invalid)}. "
-                f"허용값: {', '.join(ALLOWED_CATEGORIES)}"
-            )
-        return cleaned
+        return normalize_category_slugs(categories)
 
 
 class SubscribeResponse(BaseModel):

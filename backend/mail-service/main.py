@@ -66,9 +66,12 @@ def _render_template(template_name: str, context: dict[str, Any]) -> str:
 
 def _load_active_subscribers() -> list[dict[str, Any]]:
     base = settings.USER_SERVICE_URL.rstrip("/")
+    headers: dict[str, str] = {}
+    if settings.INTERNAL_API_TOKEN.strip():
+        headers["x-internal-token"] = settings.INTERNAL_API_TOKEN.strip()
     try:
         with httpx.Client(timeout=30.0) as client:
-            response = client.get(f"{base}/internal/subscribers")
+            response = client.get(f"{base}/internal/subscribers", headers=headers)
             response.raise_for_status()
             body = response.json()
     except httpx.TimeoutException as exc:

@@ -19,6 +19,7 @@ from s3_snapshot import (
 def _reset_s3_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     reset_bucket_not_configured_flag()
     monkeypatch.delenv("S3_BUCKET", raising=False)
+    monkeypatch.delenv("S3_BUCKET_NAME", raising=False)
 
 
 def test_build_s3_key_uses_category_slug_and_hash() -> None:
@@ -77,3 +78,24 @@ def test_upload_rss_snapshot_success(monkeypatch: pytest.MonkeyPatch) -> None:
     call_kwargs = mock_client.put_object.call_args.kwargs
     assert call_kwargs["Bucket"] == "test-bucket"
     assert call_kwargs["Key"] == result
+
+
+def test_upload_rss_snapshot_accepts_s3_bucket_name_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("S3_BUCKET_NAME", "named-bucket")
+    stats = RssSnapshotStats()
+    mock_client = MagicMock()
+
+    with patch("boto3.client", return_value=mock_client):
+        result = upload_rss_snapshot(
+            {
+                "category": "경제",
+                "title": "Title",
+                "link": "https://example.com/c",
+                "rss_description": "Economy news",
+            },
+            batch_metadata={"batch_date_kst": "2026-05-21", "collected_at_kst": "2026-05-21 06:00:00"},
+            stats=stats,
+        )
+
+    assert result is not None
+    assert mock_client.put_object.call_args.kwargs["Bucket"] == "named-bucket"
