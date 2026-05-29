@@ -42,4 +42,3 @@ except ValidationError as exc:
         },
     )
     raise
-

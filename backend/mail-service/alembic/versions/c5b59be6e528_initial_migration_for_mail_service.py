@@ -1,7 +1,7 @@
 """Initial migration for mail service
 
 Revision ID: c5b59be6e528
-Revises: 
+Revises:
 Create Date: 2026-05-21 12:20:00.914922
 
 """

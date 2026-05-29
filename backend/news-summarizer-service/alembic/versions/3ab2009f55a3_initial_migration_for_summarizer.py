@@ -1,7 +1,7 @@
 """Initial migration for summarizer
 
 Revision ID: 3ab2009f55a3
-Revises: 
+Revises:
 Create Date: 2026-05-21 15:04:01.464436
 
 """

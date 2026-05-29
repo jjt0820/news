@@ -36,7 +36,7 @@ Tests use a temporary SQLite DB and run `alembic upgrade head` automatically via
 
 ## S3 snapshot key (stored in DB)
 
-The fetcher may store an RSS snapshot object key in `summarized_news.s3_key` when uploading to S3.  
+The fetcher may store an RSS snapshot object key in `summarized_news.s3_key` when uploading to S3.
 `GET /news` does **not** expose `s3_key` (mail service unchanged).
 
 ### Related AWS env (fetcher-side)
