@@ -1,0 +1,19 @@
+# CI/CD: 4개 MSA 서비스 공통 의존성 (서비스별 requirements.txt와 동기화)
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+sqlalchemy>=2.0.36
+PyMySQL>=1.1.1
+pydantic>=2.10.0
+pydantic-settings>=2.6.0
+email-validator>=2.2.0
+httpx>=0.28.0
+apscheduler
+fastapi-mail>=1.4.1
+jinja2>=3.1.0
+feedparser
+python-dotenv
+google-generativeai
+pytest>=8.0.0
+anyio[trio]
+alembic>=1.14.0
+boto3>=1.35.0
